@@ -67,40 +67,6 @@ function formatSearchLabel(value) {
     .join(" ");
 }
 
-function formatProjectStatus(value) {
-  return formatSearchLabel(String(value || "").replace(/-/g, " "));
-}
-
-function uniqueItems(values) {
-  const seen = new Set();
-  return values.filter((value) => {
-    const key = String(value || "").trim().toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function getLoanStatus(loan) {
-  if (!loan) return "pending";
-  if (loan.status) return loan.status;
-  if (loan.returnedAt) return "returned";
-  if (loan.dueDate || loan.borrowDate) return "approved";
-  return "pending";
-}
-
-function isPendingLoan(loan) {
-  return getLoanStatus(loan) === "pending";
-}
-
-function isActiveLoan(loan) {
-  return getLoanStatus(loan) === "approved" && !loan.returnedAt;
-}
-
-function hasPendingRenewal(loan) {
-  return loan?.renewalRequestStatus === "pending";
-}
-
 function hasPendingReturn(loan) {
   return loan?.returnRequestStatus === "pending";
 }
@@ -109,15 +75,28 @@ function hasRejectedReturn(loan) {
   return loan?.returnRequestStatus === "rejected";
 }
 
+// Returns true if the loan has a pending renewal request
+function hasPendingRenewal(loan) {
+  return loan?.renewalRequestStatus === "pending";
+}
+
 const adminTabs = [
   { key: "dashboard", label: "Dashboard" },
   { key: "inventory", label: "Inventory" },
   { key: "borrowers", label: "Borrowers" },
   { key: "fines", label: "Fine Clearance" },
   { key: "demand", label: "Demand Predictor" },
-  { key: "analytics Dashboard", label: "Analytics Dashboard" },
+  { key: "analytics", label: "Analytics" },
   { key: "alerts", label: "Notifications" },
 ];
+
+function hasPendingReturn(loan) {
+  return loan?.returnRequestStatus === "pending";
+}
+
+function hasRejectedReturn(loan) {
+  return loan?.returnRequestStatus === "rejected";
+}
 
 const studentTabs = [
   { key: "home", label: "Home" },
@@ -135,6 +114,16 @@ const initialResearchForm = {
   keywords: "",
   status: "planning",
 };
+
+// Returns true if the loan is currently active (not returned and not pending approval)
+function isActiveLoan(loan) {
+  return loan.status === "approved" && !loan.returned;
+}
+
+// Returns true if the loan is pending approval
+function isPendingLoan(loan) {
+  return loan.status === "pending";
+}
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
@@ -299,11 +288,18 @@ export default function App() {
 
   async function login(e) {
     e.preventDefault();
-    await withAction(async () => {
+    try {
       const { data } = await api.post("/auth/login", authForm);
       setToken(data.token);
       setUser(data.user);
-    });
+      setMessage("");
+    } catch (error) {
+      let msg = error?.response?.data?.message || "Login failed";
+      if (error?.response?.data?.error) {
+        msg += ": " + error.response.data.error;
+      }
+      setMessage(msg);
+    }
   }
 
   async function createBook(e) {
@@ -337,11 +333,15 @@ export default function App() {
   }
 
   async function reserveBook(bookId) {
-    await withAction(async () => {
-      await api.post("/loans/reserve", { bookId });
-      await loadSession();
-      await refreshAll();
-    }, "Reservation submitted");
+    await withAction(
+      async () => {
+        await api.post("/loans/reserve", { bookId });
+        await loadSession();
+        await refreshAll();
+      },
+      "Reservation submitted"
+    );
+    // If reservation fails, withAction will set a message. Show it in the UI.
   }
 
   async function approveReservation(id) {
@@ -427,6 +427,7 @@ export default function App() {
       await refreshAll();
     }, "Fine waived");
   }
+// ...existing code...
 
   async function markAlertRead(id) {
     await withAction(async () => {
@@ -790,9 +791,15 @@ export default function App() {
   );
 
   const arFloors = {
-    1: ["CH-05", "BI-08", "BI-02"],
-    2: ["CS-12", "CS-14", "MA-03"],
-    3: ["EC-01", "HI-11"],
+    1: [
+      "CH-05", "BI-08", "BI-02", "HS-17"
+    ],
+    2: [
+      "CS-12", "CS-14", "MA-03", "MA-18", "CS-07", "CS-09", "CS-15"
+    ],
+    3: [
+      "EC-01", "HI-11", "HI-14", "EC-19", "EC-20", "EC-21", "EC-22", "ED-14"
+    ],
   };
 
   if (!user) {
@@ -801,6 +808,11 @@ export default function App() {
         <div className="auth-card">
           <h1>LibConnect Pro</h1>
           <p>University Library Intelligent Management Platform</p>
+          {message && (
+            <div className="notice" style={{ marginBottom: 12, color: '#b91c1c', background: '#fff0f0', border: '1px solid #fca5a5' }}>
+              {message}
+            </div>
+          )}
           <form onSubmit={login} className="auth-form">
             <input
               value={authForm.email}
@@ -826,6 +838,11 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {message && (
+        <div className="notice" style={{ marginBottom: 12, color: '#b91c1c', background: '#fff0f0', border: '1px solid #fca5a5' }}>
+          {message}
+        </div>
+      )}
       <header className="topbar">
         <div>
           <h1>LibConnect Pro</h1>
@@ -1553,7 +1570,9 @@ export default function App() {
                 <button className="subtle" onClick={seedResearchFromSearch}>Track This Topic</button>
                 <button
                   className="subtle"
-                  onClick={() => openAiWithPrompt(`Help me research "${query}" using the library catalog.`)}
+                  onClick={() => openAiWithPrompt(
+                    `Help me research "${query}" using the library catalog.`
+                  )}
                 >
                   Ask AI About This Topic
                 </button>
@@ -1590,6 +1609,11 @@ export default function App() {
                     ) : null}
                   </section>
                 ) : null}
+                {user.isBlocked && (
+                  <div className="notice" style={{ marginBottom: 12, color: '#b91c1c', background: '#fff0f0', border: '1px solid #fca5a5' }}>
+                    Your account is blocked. You cannot reserve books until your account is cleared by an admin.
+                  </div>
+                )}
                 {(semantic.books || []).length ? (semantic.books || []).map((book) => (
                   <article key={book._id} className="result-row">
                     <div>
@@ -1601,7 +1625,9 @@ export default function App() {
                       <button onClick={() => subscribe(book._id)}>Stock Alert</button>
                       <button
                         className="subtle"
-                        onClick={() => openAiWithPrompt(`How can I use "${book.title}" for research on "${query || book.category}"?`)}
+                        onClick={() => openAiWithPrompt(
+                          `How can I use "${book.title}" for research on "${query || book.category}"?`
+                        )}
                       >
                         Ask AI
                       </button>
@@ -1675,7 +1701,19 @@ export default function App() {
                     </td>
                     <td className="row">
                       <button disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)} onClick={() => renewLoan(loan._id)}>Request Renewal</button>
-                      <button disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)} onClick={() => returnLoan(loan._id)}>Request Return</button>
+                      <span className="highlight-tooltip">
+                        <button
+                          disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)}
+                          onClick={() => returnLoan(loan._id)}
+                        >
+                          Request Return
+                        </button>
+                        <span className="highlight-tooltip-text">
+                          Click to mark this book as returned in the system.<br/>
+                          This updates your digital record, calculates any fines, and makes the book available for others.<br/>
+                          <b>Even if you hand the book to staff, this step keeps the system accurate.</b>
+                        </span>
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -1735,9 +1773,9 @@ export default function App() {
                     onChange={(e) => setResearchForm((prev) => ({ ...prev, status: e.target.value }))}
                   >
                     <option value="planning">Planning</option>
-                    <option value="literature-review">Literature Review</option>
-                    <option value="drafting">Drafting</option>
+                    <option value="in-progress">In Progress</option>
                     <option value="completed">Completed</option>
+                    <option value="archived">Archived</option>
                   </select>
                   <div className="row">
                     <button onClick={addResearch}>Create Project</button>
@@ -1816,21 +1854,34 @@ export default function App() {
                   {(arResult.guidance || []).map((step) => <p key={step}>{step}</p>)}
                 </article>
                 <section className="grid-3">
-                  {[1, 2, 3].map((floor) => (
-                    <article className="card" key={floor}>
-                      <h3>Floor {floor}</h3>
-                      <div className="shelf-grid">
-                        {(arFloors[floor] || []).map((shelf) => (
-                          <div
-                            className={`shelf ${shelf === arResult.location.shelf ? "active" : ""}`}
-                            key={shelf}
-                          >
-                            {shelf}
-                          </div>
-                        ))}
-                      </div>
-                    </article>
-                  ))}
+                  {[1, 2, 3].map((floor) => {
+                    // Build shelf list: all shelves for this floor, plus the current shelf if missing
+                    let shelves = arFloors[floor] ? [...arFloors[floor]] : [];
+                    if (
+                      arResult.location.floor === floor &&
+                      !shelves.includes(arResult.location.shelf)
+                    ) {
+                      shelves.push(arResult.location.shelf);
+                    }
+                    return (
+                      <article
+                        className={`card${arResult.location.floor === floor ? " active" : ""}`}
+                        key={floor}
+                      >
+                        <h3>Floor {floor}</h3>
+                        <div className="shelf-grid">
+                          {shelves.map((shelf) => (
+                            <div
+                              className={`shelf${shelf === arResult.location.shelf && arResult.location.floor === floor ? " active" : ""}`}
+                              key={shelf}
+                            >
+                              {shelf}
+                            </div>
+                          ))}
+                        </div>
+                      </article>
+                    );
+                  })}
                 </section>
               </>
             ) : null}
@@ -1946,4 +1997,20 @@ export default function App() {
         </div>
     </div>
   );
+}
+
+// Returns a new array with only unique, non-null, non-undefined items
+function uniqueItems(arr) {
+  return Array.from(new Set(arr.filter((x) => x != null)));
+}
+
+// Returns a human-readable label for a research project status
+function formatProjectStatus(status) {
+  switch (status) {
+    case "planning": return "Planning";
+    case "in-progress": return "In Progress";
+    case "completed": return "Completed";
+    case "archived": return "Archived";
+    default: return status.charAt(0).toUpperCase() + status.slice(1);
+  }
 }
