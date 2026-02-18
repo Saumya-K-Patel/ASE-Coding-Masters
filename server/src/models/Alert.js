@@ -4,7 +4,7 @@ const alertSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["due", "stock", "overdue", "system", "reservation"],
+      enum: ["due", "stock", "overdue", "system", "reservation", "renewal", "return", "fine"],
       required: true,
     },
     message: { type: String, required: true },
