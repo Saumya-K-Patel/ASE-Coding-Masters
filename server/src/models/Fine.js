@@ -8,6 +8,8 @@ const fineSchema = new mongoose.Schema(
     reason: { type: String, default: "Overdue return" },
     status: { type: String, enum: ["pending", "paid", "waived"], default: "pending" },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    verifiedAt: { type: Date, default: null },
+    resolutionNote: { type: String, default: "" },
   },
   { timestamps: true }
 );
