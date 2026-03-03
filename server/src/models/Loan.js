@@ -15,6 +15,8 @@ const loanSchema = new mongoose.Schema(
     returnedAt: { type: Date, default: null },
     approvedAt: { type: Date, default: null },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    reservationDecisionAt: { type: Date, default: null },
+    reservationDecisionBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     rejectionReason: { type: String, default: "" },
     renewalRequestStatus: {
       type: String,
@@ -27,10 +29,13 @@ const loanSchema = new mongoose.Schema(
     renewalRejectionReason: { type: String, default: "" },
     returnRequestStatus: {
       type: String,
-      enum: ["none", "pending"],
+      enum: ["none", "pending", "rejected"],
       default: "none",
     },
     returnRequestedAt: { type: Date, default: null },
+    returnDecisionAt: { type: Date, default: null },
+    returnDecisionBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    returnRejectionReason: { type: String, default: "" },
     renewalCount: { type: Number, default: 0 },
     maxRenewals: { type: Number, default: 2 },
     borrowPolicyDays: { type: Number, default: 14 },
