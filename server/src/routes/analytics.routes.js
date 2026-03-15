@@ -8,7 +8,7 @@ import { requireRole } from "../middleware/roles.js";
 
 const router = express.Router();
 
-router.get("/dashboard", authRequired, requireRole("librarian", "staff", "admin", "faculty"), async (req, res) => {
+router.get("/dashboard", authRequired, async (req, res) => {
   const [totalBooks, activeLoans, users, topBooks] = await Promise.all([
     Book.countDocuments(),
     Loan.countDocuments({ returnedAt: null }),
