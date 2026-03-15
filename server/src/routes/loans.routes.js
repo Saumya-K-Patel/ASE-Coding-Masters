@@ -43,6 +43,7 @@ function serializeLoan(loan) {
     requestDate: plain.requestDate || plain.createdAt || plain.borrowDate || null,
     renewalRequestStatus: plain.renewalRequestStatus || "none",
     returnRequestStatus: plain.returnRequestStatus || "none",
+    returnRejectionReason: plain.returnRejectionReason || "",
     book: serializeBook(plain.book),
   };
 }
@@ -180,6 +181,8 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
     loan.dueDate = dueDate;
     loan.approvedAt = borrowDate;
     loan.approvedBy = req.user._id;
+    loan.reservationDecisionAt = borrowDate;
+    loan.reservationDecisionBy = req.user._id;
     loan.rejectionReason = "";
     loan.borrowPolicyDays = loanDays;
     loan.maxRenewals = Number(loan.book?.borrowPolicy?.maxRenewals) || loan.maxRenewals || 2;
@@ -188,7 +191,7 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
     await persistBookAvailability(loan.book, stock - 1);
 
     await Alert.create({
-      type: "due",
+      type: "reservation",
       message: `Your reservation for "${loan.book.title}" was approved. Due on ${dueDate.toISOString().slice(0, 10)}.`,
       recipient: loan.user._id,
     });
@@ -212,6 +215,8 @@ router.post("/:id/reject", authRequired, requireRole("admin"), async (req, res) 
     const reason = String(req.body.reason || "").trim() || "Reservation was not approved by the admin.";
     loan.status = "rejected";
     loan.rejectionReason = reason;
+    loan.reservationDecisionAt = new Date();
+    loan.reservationDecisionBy = req.user._id;
     loan.approvedAt = null;
     loan.approvedBy = null;
     loan.borrowDate = null;
@@ -219,7 +224,7 @@ router.post("/:id/reject", authRequired, requireRole("admin"), async (req, res) 
     await loan.save();
 
     await Alert.create({
-      type: "system",
+      type: "reservation",
       message: `Your reservation for "${loan.book.title}" was rejected. Reason: ${reason}`,
       recipient: loan.user._id,
     });
@@ -264,12 +269,12 @@ router.post("/:id/renew", authRequired, async (req, res) => {
 
     await Alert.create([
       {
-        type: "system",
+        type: "renewal",
         message: `Renewal request submitted for "${loan.book?.title || "book"}". An admin will review it.`,
         recipient: loan.user._id,
       },
       {
-        type: "system",
+        type: "renewal",
         message: `${loan.user?.name || "A user"} requested a renewal for "${loan.book?.title || "book"}".`,
         recipient: null,
       },
@@ -301,7 +306,7 @@ router.post("/:id/renew/approve", authRequired, requireRole("admin"), async (req
     await loan.save();
 
     await Alert.create({
-      type: "due",
+      type: "renewal",
       message: `Your renewal for "${loan.book?.title || "book"}" was approved. New due date: ${loan.dueDate.toISOString().slice(0, 10)}.`,
       recipient: loan.user._id,
     });
@@ -329,7 +334,7 @@ router.post("/:id/renew/reject", authRequired, requireRole("admin"), async (req,
     await loan.save();
 
     await Alert.create({
-      type: "system",
+      type: "renewal",
       message: `Your renewal request for "${loan.book?.title || "book"}" was rejected. Reason: ${reason}`,
       recipient: loan.user._id,
     });
@@ -358,16 +363,19 @@ router.post("/:id/return", authRequired, async (req, res) => {
 
       loan.returnRequestStatus = "pending";
       loan.returnRequestedAt = new Date();
+      loan.returnDecisionAt = null;
+      loan.returnDecisionBy = null;
+      loan.returnRejectionReason = "";
       await loan.save();
 
       await Alert.create([
         {
-          type: "system",
+          type: "return",
           message: `Return request submitted for "${loan.book?.title || "book"}". An admin will process it.`,
           recipient: loan.user._id,
         },
         {
-          type: "system",
+          type: "return",
           message: `${loan.user?.name || "A user"} requested to return "${loan.book?.title || "book"}".`,
           recipient: null,
         },
@@ -385,6 +393,9 @@ router.post("/:id/return", authRequired, async (req, res) => {
     loan.status = "returned";
     loan.returnRequestStatus = "none";
     loan.returnRequestedAt = null;
+    loan.returnDecisionAt = returnedAt;
+    loan.returnDecisionBy = req.user._id;
+    loan.returnRejectionReason = "";
     loan.renewalRequestStatus = "none";
     await loan.save();
 
@@ -413,7 +424,7 @@ router.post("/:id/return", authRequired, async (req, res) => {
       });
     } else {
       await Alert.create({
-        type: "system",
+        type: "return",
         message: `Your return for "${loan.book.title}" was processed by the admin. Thank you for returning it on time.`,
         recipient: loan.user._id,
       });
@@ -436,6 +447,34 @@ router.post("/:id/return", authRequired, async (req, res) => {
     return res.json({ loan: serializeLoan(loan), fineAmount, user: updatedUser });
   } catch (error) {
     return res.status(400).json({ message: "Return failed", error: error.message });
+  }
+});
+
+router.post("/:id/return/reject", authRequired, requireRole("admin"), async (req, res) => {
+  try {
+    const loan = await findLoanForUser(req.params.id);
+    if (!loan) return res.status(404).json({ message: "Loan not found" });
+    if (!isLoanApproved(loan)) return res.status(400).json({ message: "Only approved loans can receive a return decision." });
+    if (loan.returnRequestStatus !== "pending") {
+      return res.status(400).json({ message: "There is no pending return request for this loan." });
+    }
+
+    const reason = String(req.body.reason || "").trim() || "Return request needs more review before processing.";
+    loan.returnRequestStatus = "rejected";
+    loan.returnDecisionAt = new Date();
+    loan.returnDecisionBy = req.user._id;
+    loan.returnRejectionReason = reason;
+    await loan.save();
+
+    await Alert.create({
+      type: "return",
+      message: `Your return request for "${loan.book?.title || "book"}" was rejected. Reason: ${reason}`,
+      recipient: loan.user._id,
+    });
+
+    return res.json(serializeLoan(loan));
+  } catch (error) {
+    return res.status(400).json({ message: "Return rejection failed", error: error.message });
   }
 });
 
