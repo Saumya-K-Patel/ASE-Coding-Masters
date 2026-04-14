@@ -229,6 +229,36 @@ function topBookSignals(book) {
   return `${book.title} by ${book.author} | ${book.category} | Floor ${location.floor} | Shelf ${location.shelf} | Stock ${getBookStock(book)}/${getBookTotalCopies(book)}`;
 }
 
+function uniqueStrings(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = normalizeText(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildSuggestedPrompts({ queryText, books, activeProjects }) {
+  const focusTopic = String(
+    queryText
+    || activeProjects?.[0]?.researchQuestion
+    || activeProjects?.[0]?.topic
+    || books?.[0]?.title
+    || "my topic"
+  ).trim();
+  const topBook = books?.[0]?.title;
+  const methodsHint = activeProjects?.[0]?.methodology ? ` using ${activeProjects[0].methodology}` : "";
+  const prompts = [
+    `Turn "${focusTopic}" into a better library search plan.`,
+    `Give me 3 keyword combinations for researching "${focusTopic}".`,
+    topBook ? `Compare "${topBook}" with two other useful books for "${focusTopic}".` : "",
+    `What should I read first for "${focusTopic}"${methodsHint} and why?`,
+  ];
+
+  return uniqueStrings(prompts).slice(0, 4);
+}
+
 function buildFallbackReply({ userText, books, activeProjects, activeLoans }) {
   const topBooks = (books || []).slice(0, 4);
   const booksBlock = topBooks.length
@@ -256,12 +286,14 @@ function buildFallbackReply({ userText, books, activeProjects, activeLoans }) {
   ].join("\n");
 }
 
-function buildFallbackPayload({ userText, books, activeProjects, activeLoans, model, warning }) {
+function buildFallbackPayload({ userText, books, activeProjects, activeLoans, model, warning, latencyMs, suggestedPrompts }) {
   return {
     reply: buildFallbackReply({ userText, books, activeProjects, activeLoans }),
     provider: "local-library-fallback",
     model,
     sources: buildBookSources(books),
+    latencyMs,
+    suggestedPrompts: suggestedPrompts || [],
     context: {
       projectsUsed: activeProjects.length,
       loansUsed: activeLoans.length,
@@ -371,6 +403,7 @@ async function chatWithOllama(messages) {
 }
 
 router.post("/assistant", authRequired, async (req, res) => {
+  const startedAt = Date.now();
   try {
     const text = String(req.body.message || "").trim();
     const history = mapMessages(req.body.messages);
@@ -394,9 +427,25 @@ router.post("/assistant", authRequired, async (req, res) => {
     const booksForContext = rankedBooks.length
       ? rankedBooks
       : await Book.find({}).limit(4);
+    const suggestedPrompts = buildSuggestedPrompts({
+      queryText,
+      books: booksForContext,
+      activeProjects,
+    });
 
     const projectsContext = activeProjects.length
-      ? activeProjects.map((project, idx) => `${idx + 1}. ${project.topic}`).join("\n")
+      ? activeProjects
+        .map((project, idx) => {
+          const keywords = (project.keywords || []).slice(0, 4).join(", ");
+          return [
+            `${idx + 1}. Topic: ${project.topic}`,
+            project.researchQuestion ? `Question: ${project.researchQuestion}` : "",
+            project.methodology ? `Method: ${project.methodology}` : "",
+            keywords ? `Keywords: ${keywords}` : "",
+            project.status ? `Status: ${project.status}` : "",
+          ].filter(Boolean).join(" | ");
+        })
+        .join("\n")
       : "None";
 
     const loansContext = activeLoans.length
@@ -448,6 +497,8 @@ router.post("/assistant", authRequired, async (req, res) => {
           activeProjects,
           activeLoans,
           model: "local-library-fallback",
+          latencyMs: Date.now() - startedAt,
+          suggestedPrompts,
           warning: "Ollama returned an empty response. Local library-aware guidance was used instead.",
         }));
       }
@@ -457,6 +508,8 @@ router.post("/assistant", authRequired, async (req, res) => {
         provider: "ollama",
         model,
         sources: buildBookSources(booksForContext),
+        latencyMs: Date.now() - startedAt,
+        suggestedPrompts,
         context: {
           projectsUsed: activeProjects.length,
           loansUsed: activeLoans.length,
@@ -470,6 +523,8 @@ router.post("/assistant", authRequired, async (req, res) => {
         activeProjects,
         activeLoans,
         model: "local-library-fallback",
+        latencyMs: Date.now() - startedAt,
+        suggestedPrompts,
         warning: `${error.message} Local library-aware guidance was used instead.`,
       }));
     }
@@ -480,6 +535,8 @@ router.post("/assistant", authRequired, async (req, res) => {
       activeProjects: [],
       activeLoans: [],
       model: "local-library-fallback",
+      latencyMs: Date.now() - startedAt,
+      suggestedPrompts: [],
       warning: `AI assistant request failed before reaching Ollama. Local fallback was used. ${error.message}`,
     }));
   }

@@ -32,6 +32,8 @@ const STOP_WORDS = new Set([
   "this", "that", "these", "those", "about", "into", "across", "as", "be", "it", "its", "their", "your",
 ]);
 
+const METHODS_TERMS = ["case study", "qualitative", "quantitative", "survey", "comparative", "literature review"];
+
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -56,6 +58,16 @@ function tokenize(text) {
     .split(" ")
     .map((x) => x.trim())
     .filter((x) => x && !STOP_WORDS.has(x));
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = normalizeText(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function termFreq(tokens) {
@@ -157,6 +169,47 @@ function matchesUrbanSupportBook(book) {
   const tags = normalizeText((book.tags || []).join(" "));
   const haystack = `${normalizeText(book.category || "")} ${title} ${topics} ${tags}`;
   return /\bpolicy\b|\bdevelopment\b|\bsocial\b|\bcommunity\b|\beconomics\b|\bwelfare\b|\bpublic health\b/.test(haystack);
+}
+
+function buildIntentLabels(query) {
+  const q = normalizeText(query);
+  const labels = [];
+
+  if (q) labels.push("topic search");
+  if (METHODS_TERMS.some((term) => q.includes(term))) labels.push("methods refined");
+  if (/\bavailable\b|\bin stock\b|\bcopy\b/.test(q)) labels.push("availability aware");
+  if (/\bby\b|\bauthor\b/.test(q)) labels.push("author-led");
+
+  return uniqueStrings(labels);
+}
+
+function buildSuggestedQueries(query, relatedThemes) {
+  const trimmed = String(query || "").trim();
+  if (!trimmed) return [];
+
+  const needsMethod = !METHODS_TERMS.some((term) => normalizeText(trimmed).includes(term));
+  const suggestions = [
+    needsMethod ? `${trimmed} qualitative study` : "",
+    needsMethod ? `${trimmed} literature review` : "",
+    `${trimmed} case study`,
+    `${trimmed} beginner guide`,
+    ...((relatedThemes || []).slice(0, 3).map((theme) => `${trimmed} ${theme}`)),
+  ];
+
+  return uniqueStrings(suggestions).slice(0, 6);
+}
+
+function buildSearchPlan(query, relatedThemes) {
+  const topTheme = relatedThemes?.[0];
+  const plan = [
+    "Start with your core topic phrase and scan the top 3 books for category overlap.",
+    "Add one methods term such as qualitative, quantitative, or case study to narrow the search.",
+    topTheme
+      ? `Try the related theme "${topTheme}" if the first results are too narrow or repetitive.`
+      : "Use a related theme from the result list to widen the search when needed.",
+  ];
+
+  return uniqueStrings(plan);
 }
 
 function expandedTermsFromQuery(query) {
@@ -310,15 +363,22 @@ router.get("/semantic", authRequired, async (req, res) => {
   }
 
   const related = Object.keys(topicBuckets).slice(0, 6);
+  const relatedForUi = related.length ? related : relatedThemes;
+  const suggestedQueries = buildSuggestedQueries(q, relatedForUi);
+  const intentLabels = buildIntentLabels(q);
 
   return res.json({
     topic: q,
     books: rankedBooks.map(serializeBook),
-    relatedThemes: related.length ? related : relatedThemes,
+    relatedThemes: relatedForUi,
     meta: {
       totalCandidates: books.length,
       returned: rankedBooks.length,
       strategy: "weighted-semantic-ranking",
+      intentLabels,
+      expandedTerms: uniqueStrings(expandedTerms).slice(0, 8),
+      suggestedQueries,
+      plan: buildSearchPlan(q, relatedForUi),
     },
   });
 });

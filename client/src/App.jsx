@@ -60,6 +60,27 @@ function formatAiProvider(provider) {
   return provider;
 }
 
+function formatSearchLabel(value) {
+  return String(value || "")
+    .split(" ")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function formatProjectStatus(value) {
+  return formatSearchLabel(String(value || "").replace(/-/g, " "));
+}
+
+function uniqueItems(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = String(value || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getLoanStatus(loan) {
   if (!loan) return "pending";
   if (loan.status) return loan.status;
@@ -107,6 +128,14 @@ const studentTabs = [
   { key: "account", label: "My Account" },
 ];
 
+const initialResearchForm = {
+  topic: "",
+  researchQuestion: "",
+  methodology: "",
+  keywords: "",
+  status: "planning",
+};
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(null);
@@ -123,6 +152,8 @@ export default function App() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [research, setResearch] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [showResearchForm, setShowResearchForm] = useState(false);
+  const [researchForm, setResearchForm] = useState(initialResearchForm);
 
   const [query, setQuery] = useState("");
   const [semantic, setSemantic] = useState(null);
@@ -411,6 +442,13 @@ export default function App() {
     });
   }
 
+  async function runGuidedSearch(nextQuery) {
+    const trimmed = String(nextQuery || "").trim();
+    if (!trimmed) return;
+    setQuery(trimmed);
+    await semanticSearch(trimmed);
+  }
+
   async function runHomeSearch(e) {
     e.preventDefault();
     if (!query.trim()) {
@@ -425,11 +463,12 @@ export default function App() {
     });
   }
 
-  async function sendAI() {
-    if (!aiInput.trim() || aiLoading) return;
-    const mine = { role: "user", text: aiInput.trim() };
+  async function sendAI(nextText = null) {
+    const outgoing = String(nextText ?? aiInput).trim();
+    if (!outgoing || aiLoading) return;
+    const mine = { role: "user", text: outgoing };
     setAiMessages((prev) => [...prev, mine]);
-    setAiInput("");
+    if (nextText === null) setAiInput("");
     setAiLoading(true);
     try {
       const history = [...aiMessages, mine].map((m) => ({ role: m.role, text: m.text })).slice(-12);
@@ -442,7 +481,9 @@ export default function App() {
           provider: data.provider || "",
           model: data.model || "",
           warning: data.warning || "",
+          latencyMs: data.latencyMs || 0,
           context: data.context || null,
+          suggestedPrompts: Array.isArray(data.suggestedPrompts) ? data.suggestedPrompts : [],
           sources: Array.isArray(data.sources) ? data.sources : [],
         },
       ]);
@@ -452,6 +493,17 @@ export default function App() {
     } finally {
       setAiLoading(false);
     }
+  }
+
+  function openAiWithPrompt(prompt, sendNow = true) {
+    const nextPrompt = String(prompt || "").trim();
+    if (!nextPrompt) return;
+    setAiOpen(true);
+    if (sendNow) {
+      sendAI(nextPrompt);
+      return;
+    }
+    setAiInput(nextPrompt);
   }
 
   async function jumpToARFromSource(source) {
@@ -486,19 +538,43 @@ export default function App() {
   }
 
   async function addResearch() {
-    const topic = prompt("Research topic");
-    if (!topic) return;
+    if (!researchForm.topic.trim()) {
+      setMessage("Add a research topic before creating the project");
+      return;
+    }
+
     await withAction(async () => {
       await api.post("/research", {
-        topic,
+        topic: researchForm.topic,
+        researchQuestion: researchForm.researchQuestion,
+        methodology: researchForm.methodology,
+        keywords: researchForm.keywords.split(",").map((value) => value.trim()).filter(Boolean),
+        status: researchForm.status,
         milestones: [
           { phase: "Topic Selection", progress: 0, milestone: "Define research scope", notes: "" },
           { phase: "Literature Review", progress: 0, milestone: "Collect 20 papers", notes: "" },
           { phase: "Methodology", progress: 0, milestone: "Draft methods", notes: "" },
         ],
       });
+      setResearchForm(initialResearchForm);
+      setShowResearchForm(false);
       await loadResearch();
     }, "Research project created");
+  }
+
+  function seedResearchFromSearch() {
+    const keywords = uniqueItems([
+      ...String(researchForm.keywords || "").split(",").map((value) => value.trim()),
+      ...(semantic?.relatedThemes || []).slice(0, 4),
+    ]).join(", ");
+
+    setResearchForm((prev) => ({
+      ...prev,
+      topic: prev.topic || query,
+      keywords,
+    }));
+    setShowResearchForm(true);
+    setActiveTab("research");
   }
 
   async function updateMilestoneProgress(projectId, milestoneIndex, nextProgress) {
@@ -696,6 +772,21 @@ export default function App() {
   const latestAiRuntime = useMemo(
     () => [...aiMessages].reverse().find((entry) => entry.role === "ai" && (entry.model || entry.provider || entry.warning)) || null,
     [aiMessages]
+  );
+  const aiQuickPrompts = useMemo(
+    () => {
+      const dynamic = latestAiRuntime?.suggestedPrompts?.length
+        ? latestAiRuntime.suggestedPrompts
+        : [
+          query ? `Help me search for "${query}" using better keywords.` : "",
+          research[0]?.topic ? `Turn "${research[0].topic}" into a research question and search plan.` : "",
+          "Show me how to compare the top 3 relevant books for my topic.",
+          "Suggest a simple literature review workflow using the library catalog.",
+        ];
+
+      return uniqueItems(dynamic).slice(0, 4);
+    },
+    [latestAiRuntime, query, research]
   );
 
   const arFloors = {
@@ -1457,11 +1548,48 @@ export default function App() {
               />
               <button onClick={() => semanticSearch(query)}>Search</button>
             </div>
+            {query.trim() ? (
+              <div className="row wrap search-action-row">
+                <button className="subtle" onClick={seedResearchFromSearch}>Track This Topic</button>
+                <button
+                  className="subtle"
+                  onClick={() => openAiWithPrompt(`Help me research "${query}" using the library catalog.`)}
+                >
+                  Ask AI About This Topic
+                </button>
+              </div>
+            ) : null}
             {semantic ? (
               <div className="stack">
                 <p className="muted">
                   {(semantic.meta?.returned ?? semantic.books?.length ?? 0)} results • {(semantic.meta?.strategy || "search")}
                 </p>
+                {semantic.meta?.plan?.length ? (
+                  <section className="search-guidance-card">
+                    <div className="section-head">
+                      <h3>Search Guide</h3>
+                    </div>
+                    {(semantic.meta.intentLabels || []).length ? (
+                      <div className="row wrap">
+                        {(semantic.meta.intentLabels || []).map((label) => (
+                          <span key={label} className="pill ok">{formatSearchLabel(label)}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="stack compact">
+                      {(semantic.meta.plan || []).map((step) => (
+                        <p key={step} className="muted">{step}</p>
+                      ))}
+                    </div>
+                    {(semantic.meta.expandedTerms || []).length ? (
+                      <div className="row wrap">
+                        {(semantic.meta.expandedTerms || []).map((term) => (
+                          <span key={term} className="term-chip">{term}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
                 {(semantic.books || []).length ? (semantic.books || []).map((book) => (
                   <article key={book._id} className="result-row">
                     <div>
@@ -1471,14 +1599,31 @@ export default function App() {
                     <div className="row">
                       <button disabled={user.isBlocked} onClick={() => reserveBook(book._id)}>Reserve</button>
                       <button onClick={() => subscribe(book._id)}>Stock Alert</button>
+                      <button
+                        className="subtle"
+                        onClick={() => openAiWithPrompt(`How can I use "${book.title}" for research on "${query || book.category}"?`)}
+                      >
+                        Ask AI
+                      </button>
                     </div>
                   </article>
                 )) : <p className="muted">No matches found. Try a broader topic or related theme.</p>}
+                {(semantic.meta?.suggestedQueries || []).length ? (
+                  <div className="stack compact">
+                    <p className="muted">Try these refined searches next:</p>
+                    <div className="row wrap">
+                      {(semantic.meta.suggestedQueries || []).map((suggestion) => (
+                        <button key={suggestion} className="subtle" onClick={() => runGuidedSearch(suggestion)}>
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="row wrap">
                   {(semantic.relatedThemes || []).map((theme) => (
                     <button key={theme} className="subtle" onClick={() => {
-                      setQuery(theme);
-                      semanticSearch(theme);
+                      runGuidedSearch(theme);
                     }}>{theme}</button>
                   ))}
                 </div>
@@ -1556,11 +1701,77 @@ export default function App() {
 
         {!isAdmin && activeTab === "research" ? (
           <section className="panel">
-            <div className="row between"><h2>Research Tracker</h2><button onClick={addResearch}>New Project</button></div>
+            <div className="row between">
+              <h2>Research Tracker</h2>
+              <button onClick={() => setShowResearchForm((prev) => !prev)}>
+                {showResearchForm ? "Close Form" : "New Project"}
+              </button>
+            </div>
+            {showResearchForm ? (
+              <article className="card research-form-card">
+                <div className="stack compact">
+                  <input
+                    value={researchForm.topic}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, topic: e.target.value }))}
+                    placeholder="Topic"
+                  />
+                  <input
+                    value={researchForm.researchQuestion}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, researchQuestion: e.target.value }))}
+                    placeholder="Research question"
+                  />
+                  <input
+                    value={researchForm.methodology}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, methodology: e.target.value }))}
+                    placeholder="Methodology or approach"
+                  />
+                  <input
+                    value={researchForm.keywords}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, keywords: e.target.value }))}
+                    placeholder="Keywords, separated by commas"
+                  />
+                  <select
+                    value={researchForm.status}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, status: e.target.value }))}
+                  >
+                    <option value="planning">Planning</option>
+                    <option value="literature-review">Literature Review</option>
+                    <option value="drafting">Drafting</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                  <div className="row">
+                    <button onClick={addResearch}>Create Project</button>
+                    <button className="subtle" onClick={() => setResearchForm(initialResearchForm)}>Reset</button>
+                  </div>
+                </div>
+              </article>
+            ) : null}
             <div className="stack">
               {research.map((project) => (
                 <article key={project._id} className="card">
-                  <h3>{project.topic}</h3>
+                  <div className="row between wrap">
+                    <h3>{project.topic}</h3>
+                    <span className="pill ok">{formatProjectStatus(project.status || "planning")}</span>
+                  </div>
+                  {project.researchQuestion ? <p className="muted">{project.researchQuestion}</p> : null}
+                  {project.methodology ? <p className="muted">Method: {project.methodology}</p> : null}
+                  {(project.keywords || []).length ? (
+                    <div className="row wrap">
+                      {(project.keywords || []).map((keyword) => (
+                        <span key={`${project._id}-${keyword}`} className="term-chip">{keyword}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="row wrap">
+                    <button
+                      className="subtle"
+                      onClick={() => openAiWithPrompt(
+                        `Help me plan a literature review for "${project.topic}"${project.methodology ? ` using ${project.methodology}` : ""}.`
+                      )}
+                    >
+                      Ask AI About This Project
+                    </button>
+                  </div>
                   {(project.milestones || []).map((m, milestoneIndex) => (
                     <div key={`${project._id}-${m.phase}`} className="milestone-row">
                       <p>{m.phase}</p>
@@ -1672,6 +1883,11 @@ export default function App() {
                         Context used: {m.context.projectsUsed} project(s), {m.context.loansUsed} loan(s), {m.context.booksUsed} book match(es)
                       </div>
                     ) : null}
+                    {m.role === "ai" && m.latencyMs ? (
+                      <div className="ai-context-meta">
+                        Answered in {(Number(m.latencyMs) / 1000).toFixed(Number(m.latencyMs) >= 1000 ? 1 : 2)}s
+                      </div>
+                    ) : null}
                     {m.role === "ai" && m.warning ? <div className="ai-warning">{m.warning}</div> : null}
                     {m.role === "ai" && Array.isArray(m.sources) && m.sources.length ? (
                       <div className="ai-source-list">
@@ -1692,6 +1908,20 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              {aiQuickPrompts.length ? (
+                <div className="ai-prompt-strip">
+                  {aiQuickPrompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      className="subtle ai-prompt-chip"
+                      onClick={() => sendAI(prompt)}
+                      disabled={aiLoading}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="row">
                 <input
                   value={aiInput}

@@ -542,6 +542,38 @@ thead th {
   font-size: 14px;
 }
 
+.search-guidance-card {
+  border: 1px solid #d9e3f4;
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(135deg, #fffef5 0%, #f6fbff 100%);
+  display: grid;
+  gap: 10px;
+}
+
+.term-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: #2d537f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.research-form-card {
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, #fffdf7 0%, #f7fbff 100%);
+}
+
+.research-form-card input,
+.research-form-card select {
+  width: 100%;
+}
+
+.search-action-row {
+  margin-top: 10px;
+}
+
 .muted {
   color: #66798d;
   font-size: 13px;
@@ -1143,6 +1175,18 @@ thead th {
   padding: 5px 8px;
   font-size: 11px;
   box-shadow: none;
+}
+
+.ai-prompt-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-prompt-chip {
+  max-width: 100%;
+  text-align: left;
 }
 
 @keyframes aiRainbowShift {

@@ -30,6 +30,20 @@ This project converts your existing single-page frontend into a MERN full-stack 
 - Research tracker module
 - AI research helper endpoint (local Ollama integration)
 
+## AI, Search, And Research Workflow
+
+- `Search` now returns guided refinement metadata in addition to ranked books.
+- Students get suggested follow-up queries, related themes, and a short search plan in the UI.
+- The floating Ollama helper now shows runtime feedback and one-tap follow-up prompts.
+- Search results can be handed directly to the AI helper for deeper research advice.
+- Research projects now support:
+  - topic
+  - research question
+  - methodology
+  - keyword tags
+  - planning status
+- Research tracker cards can send project context back into the AI helper for literature review planning.
+
 ## Setup
 
 1. Install dependencies:
@@ -94,5 +108,7 @@ npm run dev
 ## Notes
 
 - AI Helper now calls your local Ollama server at `OLLAMA_BASE_URL` and keeps the existing library-aware ranking/context.
+- `/api/search/semantic` now returns query guidance metadata such as `intentLabels`, `expandedTerms`, `suggestedQueries`, and a short `plan`.
+- `/api/ai/assistant` now returns `latencyMs`, `suggestedPrompts`, ranked source cards, and runtime metadata for the chat UI.
 - If Ollama is running but no model is available, or the request fails, `/api/ai/assistant` falls back to deterministic library-aware guidance using live catalog, loans, and project context.
 - AR endpoint currently returns guidance data; mobile AR rendering can be integrated next.
