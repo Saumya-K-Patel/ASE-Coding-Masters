@@ -67,6 +67,16 @@ function formatSearchLabel(value) {
     .join(" ");
 }
 
+function uniqueItems(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = String(value || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getLoanStatus(loan) {
   if (!loan) return "pending";
   if (loan.status) return loan.status;
@@ -410,11 +420,12 @@ export default function App() {
     });
   }
 
-  async function sendAI() {
-    if (!aiInput.trim() || aiLoading) return;
-    const mine = { role: "user", text: aiInput.trim() };
+  async function sendAI(nextText = null) {
+    const outgoing = String(nextText ?? aiInput).trim();
+    if (!outgoing || aiLoading) return;
+    const mine = { role: "user", text: outgoing };
     setAiMessages((prev) => [...prev, mine]);
-    setAiInput("");
+    if (nextText === null) setAiInput("");
     setAiLoading(true);
     try {
       const history = [...aiMessages, mine].map((m) => ({ role: m.role, text: m.text })).slice(-12);
@@ -427,7 +438,9 @@ export default function App() {
           provider: data.provider || "",
           model: data.model || "",
           warning: data.warning || "",
+          latencyMs: data.latencyMs || 0,
           context: data.context || null,
+          suggestedPrompts: Array.isArray(data.suggestedPrompts) ? data.suggestedPrompts : [],
           sources: Array.isArray(data.sources) ? data.sources : [],
         },
       ]);
@@ -681,6 +694,21 @@ export default function App() {
   const latestAiRuntime = useMemo(
     () => [...aiMessages].reverse().find((entry) => entry.role === "ai" && (entry.model || entry.provider || entry.warning)) || null,
     [aiMessages]
+  );
+  const aiQuickPrompts = useMemo(
+    () => {
+      const dynamic = latestAiRuntime?.suggestedPrompts?.length
+        ? latestAiRuntime.suggestedPrompts
+        : [
+          query ? `Help me search for "${query}" using better keywords.` : "",
+          research[0]?.topic ? `Turn "${research[0].topic}" into a research question and search plan.` : "",
+          "Show me how to compare the top 3 relevant books for my topic.",
+          "Suggest a simple literature review workflow using the library catalog.",
+        ];
+
+      return uniqueItems(dynamic).slice(0, 4);
+    },
+    [latestAiRuntime, query, research]
   );
 
   const arFloors = {
@@ -1683,6 +1711,11 @@ export default function App() {
                         Context used: {m.context.projectsUsed} project(s), {m.context.loansUsed} loan(s), {m.context.booksUsed} book match(es)
                       </div>
                     ) : null}
+                    {m.role === "ai" && m.latencyMs ? (
+                      <div className="ai-context-meta">
+                        Answered in {(Number(m.latencyMs) / 1000).toFixed(Number(m.latencyMs) >= 1000 ? 1 : 2)}s
+                      </div>
+                    ) : null}
                     {m.role === "ai" && m.warning ? <div className="ai-warning">{m.warning}</div> : null}
                     {m.role === "ai" && Array.isArray(m.sources) && m.sources.length ? (
                       <div className="ai-source-list">
@@ -1703,6 +1736,20 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              {aiQuickPrompts.length ? (
+                <div className="ai-prompt-strip">
+                  {aiQuickPrompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      className="subtle ai-prompt-chip"
+                      onClick={() => sendAI(prompt)}
+                      disabled={aiLoading}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="row">
                 <input
                   value={aiInput}

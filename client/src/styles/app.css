@@ -1163,6 +1163,18 @@ thead th {
   box-shadow: none;
 }
 
+.ai-prompt-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-prompt-chip {
+  max-width: 100%;
+  text-align: left;
+}
+
 @keyframes aiRainbowShift {
   0% {
     background-position: 0% 50%;
