@@ -466,6 +466,17 @@ export default function App() {
     }
   }
 
+  function openAiWithPrompt(prompt, sendNow = true) {
+    const nextPrompt = String(prompt || "").trim();
+    if (!nextPrompt) return;
+    setAiOpen(true);
+    if (sendNow) {
+      sendAI(nextPrompt);
+      return;
+    }
+    setAiInput(nextPrompt);
+  }
+
   async function jumpToARFromSource(source) {
     if (!source?.bookId) return;
     await withAction(async () => {
@@ -520,6 +531,21 @@ export default function App() {
       setShowResearchForm(false);
       await loadResearch();
     }, "Research project created");
+  }
+
+  function seedResearchFromSearch() {
+    const keywords = uniqueItems([
+      ...String(researchForm.keywords || "").split(",").map((value) => value.trim()),
+      ...(semantic?.relatedThemes || []).slice(0, 4),
+    ]).join(", ");
+
+    setResearchForm((prev) => ({
+      ...prev,
+      topic: prev.topic || query,
+      keywords,
+    }));
+    setShowResearchForm(true);
+    setActiveTab("research");
   }
 
   async function updateMilestoneProgress(projectId, milestoneIndex, nextProgress) {
@@ -1484,6 +1510,17 @@ export default function App() {
               />
               <button onClick={() => semanticSearch(query)}>Search</button>
             </div>
+            {query.trim() ? (
+              <div className="row wrap search-action-row">
+                <button className="subtle" onClick={seedResearchFromSearch}>Track This Topic</button>
+                <button
+                  className="subtle"
+                  onClick={() => openAiWithPrompt(`Help me research "${query}" using the library catalog.`)}
+                >
+                  Ask AI About This Topic
+                </button>
+              </div>
+            ) : null}
             {semantic ? (
               <div className="stack">
                 <p className="muted">
@@ -1524,6 +1561,12 @@ export default function App() {
                     <div className="row">
                       <button disabled={user.isBlocked} onClick={() => reserveBook(book._id)}>Reserve</button>
                       <button onClick={() => subscribe(book._id)}>Stock Alert</button>
+                      <button
+                        className="subtle"
+                        onClick={() => openAiWithPrompt(`How can I use "${book.title}" for research on "${query || book.category}"?`)}
+                      >
+                        Ask AI
+                      </button>
                     </div>
                   </article>
                 )) : <p className="muted">No matches found. Try a broader topic or related theme.</p>}
@@ -1679,6 +1722,16 @@ export default function App() {
                       ))}
                     </div>
                   ) : null}
+                  <div className="row wrap">
+                    <button
+                      className="subtle"
+                      onClick={() => openAiWithPrompt(
+                        `Help me plan a literature review for "${project.topic}"${project.methodology ? ` using ${project.methodology}` : ""}.`
+                      )}
+                    >
+                      Ask AI About This Project
+                    </button>
+                  </div>
                   {(project.milestones || []).map((m, milestoneIndex) => (
                     <div key={`${project._id}-${m.phase}`} className="milestone-row">
                       <p>{m.phase}</p>
