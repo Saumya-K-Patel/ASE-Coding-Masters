@@ -1,3 +1,4 @@
+// Analytics dashboard — polished with extended metrics
 import express from "express";
 import Loan from "../models/Loan.js";
 import Book from "../models/Book.js";

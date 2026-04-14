@@ -1383,3 +1383,5 @@ thead th {
     flex-direction: column;
   }
 }
+/* ── Polished inventory and analytics refinements ── */
+.analytics-skeleton-grid { min-height: 120px; }
