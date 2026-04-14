@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LibConnect Pro</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <script src="/_sdk/element_sdk.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&amp;family=DM+Sans:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
+  <script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        ink: '#ffffff',
+        slate: '#f8fafc',
+        panel: '#ffffff',
+        accent: '#2563eb',
+        accentDim: '#1d4ed8',
+        surface: '#f1f5f9',
+        muted: '#64748b',
+        bright: '#0f172a',
+        danger: '#dc2626',
+        success: '#16a34a',
+        info: '#0284c7',
+      }
+    }
+  }
+}
+</script>
+  <style>
+html,body{height:100%;margin:0;font-family:'DM Sans',sans-serif;background:#ffffff;color:#0f172a}
+h1,h2,h3,.serif{font-family:'DM Serif Display',serif}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#e2e8f0}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+.fade-in{animation:fadeIn .3s ease}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.glow{box-shadow:0 2px 12px rgba(0,0,0,.05)}
+.tab-btn{padding:12px 20px;border:none;background:transparent;color:#64748b;font-weight:500;cursor:pointer;border-bottom:2.5px solid transparent;transition:all .15s;white-space:nowrap}
+.tab-btn:hover{color:#2563eb}
+.tab-btn.active{color:#2563eb;border-bottom-color:#2563eb}
+.card{background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08);border-color:#cbd5e1}
+.badge{display:inline-flex;align-items:center;padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600}
+.btn-primary{background:#2563eb;color:#ffffff;font-weight:600;padding:10px 20px;border-radius:10px;transition:all .15s;border:none;cursor:pointer}
+.btn-primary:hover{background:#1d4ed8;box-shadow:0 2px 8px rgba(37,99,235,.2)}
+.btn-secondary{background:#f1f5f9;color:#0f172a;font-weight:500;padding:10px 20px;border-radius:10px;border:1px solid #e2e8f0;transition:all .15s;cursor:pointer}
+.btn-secondary:hover{background:#ffffff;border-color:#2563eb;color:#2563eb}
+input,select,textarea{background:#f8fafc;border:1.5px solid #e2e8f0;color:#0f172a;border-radius:10px;padding:10px 14px;font-size:14px;outline:none;transition:all .15s;font-family:'DM Sans',sans-serif}
+input:focus,select:focus,textarea:focus{border-color:#2563eb;background:#ffffff;box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+.progress-bar{background:#e2e8f0;border-radius:99px;height:8px;overflow:hidden}
+.progress-fill{height:100%;border-radius:99px;transition:width .5s ease}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:50;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.toast{position:fixed;bottom:20px;right:20px;z-index:100;padding:14px 24px;border-radius:12px;font-weight:500;animation:fadeIn .3s ease;box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.chart-bar{transition:height .5s ease;border-radius:4px 4px 0 0}
+.shelf-spot{cursor:pointer;transition:all .2s;border-radius:10px}
+.shelf-spot:hover{filter:brightness(0.95)}
+.shelf-spot.highlighted{animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+</style>
+  <style>body { box-sizing: border-box; }</style>
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+ </head>
+ <body class="h-full">
+  <div id="app" class="h-full flex overflow-hidden"></div>
+  <script>
+// ===== DATA =====
+const BOOKS = [
+  {id:'B001',title:'Introduction to Algorithms',author:'Cormen, Leiserson',category:'Computer Science',isbn:'978-0262033848',stock:5,totalCopies:8,demand:87,location:{floor:2,shelf:'CS-12',row:3},demandScore:92,examSeasonImpact:'High'},
+  {id:'B002',title:'Organic Chemistry',author:'Clayden, Greeves',category:'Chemistry',isbn:'978-0199270293',stock:2,totalCopies:6,demand:73,location:{floor:1,shelf:'CH-05',row:1},demandScore:78,examSeasonImpact:'Very High'},
+  {id:'B003',title:'Principles of Economics',author:'Mankiw',category:'Economics',isbn:'978-1305585126',stock:0,totalCopies:4,demand:91,location:{floor:3,shelf:'EC-01',row:2},demandScore:95,examSeasonImpact:'High'},
+  {id:'B004',title:'Human Anatomy',author:'Marieb, Hoehn',category:'Biology',isbn:'978-0134243818',stock:3,totalCopies:5,demand:65,location:{floor:1,shelf:'BI-08',row:4},demandScore:68,examSeasonImpact:'Medium'},
+  {id:'B005',title:'Linear Algebra Done Right',author:'Axler',category:'Mathematics',isbn:'978-3319110790',stock:7,totalCopies:10,demand:45,location:{floor:2,shelf:'MA-03',row:1},demandScore:52,examSeasonImpact:'Medium'},
+  {id:'B006',title:'The Art of War',author:'Sun Tzu',category:'History',isbn:'978-1599869773',stock:4,totalCopies:4,demand:30,location:{floor:3,shelf:'HI-11',row:2},demandScore:28,examSeasonImpact:'Low'},
+  {id:'B007',title:'Deep Learning',author:'Goodfellow, Bengio',category:'Computer Science',isbn:'978-0262035613',stock:1,totalCopies:3,demand:96,location:{floor:2,shelf:'CS-14',row:1},demandScore:98,examSeasonImpact:'Very High'},
+  {id:'B008',title:'Campbell Biology',author:'Urry, Cain',category:'Biology',isbn:'978-0134093413',stock:6,totalCopies:8,demand:58,location:{floor:1,shelf:'BI-02',row:3},demandScore:61,examSeasonImpact:'Medium'},
+];
+
+const STUDENTS = [
+  {id:'S001',name:'Aisha Rahman',email:'aisha@uni.edu',dept:'Computer Science',standing:'Good',fines:0,blocked:false},
+  {id:'S002',name:'Marcus Chen',email:'marcus@uni.edu',dept:'Chemistry',standing:'Warning',fines:15.50,blocked:false},
+  {id:'S003',name:'Priya Sharma',email:'priya@uni.edu',dept:'Economics',standing:'Blocked',fines:42.00,blocked:true},
+  {id:'S004',name:'James Okafor',email:'james@uni.edu',dept:'Biology',standing:'Good',fines:0,blocked:false},
+];
+
+let LOANS = [
+  {id:'L001',bookId:'B001',studentId:'S001',borrowDate:'2025-01-10',dueDate:'2025-01-24',returned:false,renewed:0},
+  {id:'L002',bookId:'B002',studentId:'S002',borrowDate:'2025-01-05',dueDate:'2025-01-19',returned:false,renewed:1},
+  {id:'L003',bookId:'B003',studentId:'S003',borrowDate:'2024-12-15',dueDate:'2024-12-29',returned:false,renewed:0},
+  {id:'L004',bookId:'B007',studentId:'S001',borrowDate:'2025-01-12',dueDate:'2025-01-26',returned:false,renewed:0},
+  {id:'L005',bookId:'B004',studentId:'S004',borrowDate:'2025-01-08',dueDate:'2025-01-22',returned:true,renewed:0},
+];
+
+const NOTIFICATIONS = [
+  {id:'N001',type:'due',msg:'Due date reminder sent to Aisha Rahman for "Intro to Algorithms"',time:'2h ago',read:false},
+  {id:'N002',type:'stock',msg:'"Principles of Economics" is now out of stock — 3 students waiting',time:'4h ago',read:false},
+  {id:'N003',type:'overdue',msg:'Marcus Chen overdue on "Organic Chemistry" — fine accruing',time:'1d ago',read:true},
+  {id:'N004',type:'system',msg:'System backup completed successfully',time:'2d ago',read:true},
+];
+
+const ANALYTICS_MONTHLY = [
+  {month:'Aug',loans:120},{month:'Sep',loans:210},{month:'Oct',loans:340},{month:'Nov',loans:290},{month:'Dec',loans:180},{month:'Jan',loans:360}
+];
+
+const RESEARCH_PHASES = [
+  {id:'R1',phase:'Topic Selection',progress:100,milestone:'Define research question',notes:'Selected: Impact of AI on academic libraries'},
+  {id:'R2',phase:'Literature Review',progress:65,milestone:'Read 20 papers',notes:'14/20 papers reviewed'},
+  {id:'R3',phase:'Methodology',progress:20,milestone:'Design research framework',notes:'Qualitative approach chosen'},
+  {id:'R4',phase:'Data Collection',progress:0,milestone:'Conduct interviews',notes:''},
+  {id:'R5',phase:'Writing',progress:0,milestone:'Draft chapters',notes:''},
+];
+
+const AI_RESPONSES = [
+  "Based on your topic, I recommend searching IEEE Xplore and ACM Digital Library. Try keywords: 'library automation', 'AI cataloging', 'NLP information retrieval'. Consider narrowing to a specific library type.",
+  "For your literature review, try a systematic approach: 1) Define inclusion criteria, 2) Search across 3+ databases, 3) Use PRISMA framework for screening. I can suggest relevant databases for your field.",
+  "Your research question could be strengthened by specifying a population and timeframe. Instead of 'How does AI affect libraries?', try 'How has AI-driven cataloging impacted search efficiency in academic libraries since 2020?'",
+  "Consider these related topics that might inform your research: digital preservation, metadata standards, user behavior analytics in OPAC systems, and machine learning for recommendation engines.",
+];
+
+const TOPIC_CLUSTERS = {
+  'machine learning':{books:['B001','B007'],related:['neural networks','data science','statistical learning','computer vision']},
+  'biochemistry':{books:['B002','B008'],related:['molecular biology','enzymology','pharmacology','genetics']},
+  'microeconomics':{books:['B003'],related:['game theory','behavioral economics','market structures','price theory']},
+};
+
+// ===== STATE =====
+let state = {
+  role: 'admin', // 'admin' | 'student'
+  currentStudent: STUDENTS[0],
+  adminPage: 'dashboard',
+  studentPage: 'home',
+  searchQuery: '',
+  inventoryFilter: 'All',
+  showAddBookModal: false,
+  showFineModal: null,
+  toastMsg: '',
+  toastType: 'success',
+  showToast: false,
+  aiChatMessages: [{role:'ai',text:'Hello! I\'m your AI Research Helper. I can assist with formulating research questions, selecting databases, building search strategies, and suggesting related topics. How can I help you today?'}],
+  aiInput: '',
+  arSelectedBook: null,
+  semanticQuery: '',
+  semanticResults: null,
+  studentSubscriptions: ['B003'],
+  notifPrefs: {dueReminders:true,stockAlerts:true,systemUpdates:false},
+};
+
+function getBook(id){return BOOKS.find(b=>b.id===id)}
+function getStudent(id){return STUDENTS.find(s=>s.id===id)}
+function isOverdue(loan){return !loan.returned && new Date(loan.dueDate)<new Date()}
+function daysUntilDue(loan){return Math.ceil((new Date(loan.dueDate)-new Date())/(1000*60*60*24))}
+function calcFine(loan){if(!isOverdue(loan))return 0;return Math.abs(daysUntilDue(loan))*2.5}
+
+function showToast(msg,type='success'){
+  state.toastMsg=msg;state.toastType=type;state.showToast=true;
+  render();setTimeout(()=>{state.showToast=false;render()},3000);
+}
+
+// ===== RENDER =====
+function render(){
+  const app=document.getElementById('app');
+  app.innerHTML=state.role==='admin'?renderAdmin():renderStudent();
+  lucide.createIcons();
+  attachEvents();
+}
+
+// ===== ADMIN =====
+function renderAdmin(){
+  const pages={dashboard:adminDashboard,inventory:adminInventory,borrowers:adminBorrowers,fines:adminFines,analytics:adminAnalytics,demand:adminDemand,notifications:adminNotifications};
+  const menuItems=[
+    {key:'dashboard',icon:'layout-dashboard',label:'Dashboard'},
+    {key:'inventory',icon:'book-open',label:'Inventory'},
+    {key:'borrowers',icon:'users',label:'Borrowers'},
+    {key:'fines',icon:'banknote',label:'Fine Clearance'},
+    {key:'analytics',icon:'bar-chart-3',label:'Analytics'},
+    {key:'demand',icon:'trending-up',label:'Demand Predictor'},
+    {key:'notifications',icon:'bell',label:'Notifications'},
+  ];
+  const unread=NOTIFICATIONS.filter(n=>!n.read).length;
+  return `
+  <div class="h-full flex flex-col bg-white">
+    <header class="border-b border-slate bg-white px-6 py-4">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h1 class="text-accent text-2xl serif tracking-wide" id="appTitle">${getConfig().app_title}</h1>
+          <p class="text-muted text-xs mt-1" id="instName">${getConfig().institution_name}</p>
+        </div>
+        <button id="switchRole" class="btn-secondary text-xs flex items-center gap-2"><i data-lucide="repeat" style="width:14px;height:14px"></i>Switch to Student</button>
+      </div>
+      <nav class="flex gap-2 border-t border-slate/50 pt-3 -mx-6 px-6 overflow-x-auto">
+        ${menuItems.map(m=>`
+          <button data-nav="${m.key}" class="tab-btn ${state.adminPage===m.key?'active':''} relative">
+            ${m.label}
+            ${m.key==='notifications'&&unread?`<span class="absolute -top-1.5 -right-2 bg-danger text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold">${unread}</span>`:''}
+          </button>`).join('')}
+      </nav>
+    </header>
+    <main class="flex-1 overflow-y-auto p-6 bg-white fade-in">${(pages[state.adminPage]||adminDashboard)()}</main>
+  </div>
+  ${state.showAddBookModal?addBookModal():''}
+  ${state.showFineModal?fineModal():''}
+  ${state.showToast?toast():''}`;
+}
+
+function adminDashboard(){
+  const totalBooks=BOOKS.reduce((a,b)=>a+b.totalCopies,0);
+  const activeLoans=LOANS.filter(l=>!l.returned).length;
+  const overdue=LOANS.filter(l=>isOverdue(l)).length;
+  const totalFines=STUDENTS.reduce((a,s)=>a+s.fines,0);
+  const stats=[
+    {label:'Total Books',value:totalBooks,icon:'book-open',color:'accent'},
+    {label:'Active Loans',value:activeLoans,icon:'arrow-right-left',color:'info'},
+    {label:'Overdue',value:overdue,icon:'alert-triangle',color:'danger'},
+    {label:'Fines Pending',value:'$'+totalFines.toFixed(2),icon:'banknote',color:'accent'},
+  ];
+  return `
+  <h2 class="serif text-2xl mb-6">Admin Dashboard</h2>
+  <div class="grid grid-cols-4 gap-4 mb-6">${stats.map(s=>`
+    <div class="card glow flex items-center gap-4">
+      <div class="w-11 h-11 rounded-xl bg-${s.color}/10 flex items-center justify-center"><i data-lucide="${s.icon}" style="width:22px;height:22px" class="text-${s.color}"></i></div>
+      <div><div class="text-2xl font-bold">${s.value}</div><div class="text-muted text-xs">${s.label}</div></div>
+    </div>`).join('')}</div>
+  <div class="grid grid-cols-3 gap-4">
+    <div class="card col-span-2">
+      <h3 class="serif text-lg mb-3">System Alerts</h3>
+      ${NOTIFICATIONS.filter(n=>!n.read).map(n=>`
+        <div class="flex items-start gap-3 py-2 border-b border-surface last:border-0">
+          <div class="w-2 h-2 rounded-full bg-${n.type==='overdue'?'danger':n.type==='stock'?'accent':'info'} mt-2 flex-shrink-0"></div>
+          <div><div class="text-sm">${n.msg}</div><div class="text-muted text-xs">${n.time}</div></div>
+        </div>`).join('')}
+      ${NOTIFICATIONS.filter(n=>!n.read).length===0?'<p class="text-muted text-sm">No new alerts</p>':''}
+    </div>
+    <div class="card">
+      <h3 class="serif text-lg mb-3">Loan Period Breakdown</h3>
+      <div class="space-y-3">
+        <div><div class="flex justify-between text-sm mb-1"><span>On Time</span><span class="text-success">${activeLoans-overdue}</span></div><div class="progress-bar"><div class="progress-fill bg-success" style="width:${activeLoans?(activeLoans-overdue)/activeLoans*100:0}%"></div></div></div>
+        <div><div class="flex justify-between text-sm mb-1"><span>Overdue</span><span class="text-danger">${overdue}</span></div><div class="progress-bar"><div class="progress-fill bg-danger" style="width:${activeLoans?overdue/activeLoans*100:0}%"></div></div></div>
+        <div><div class="flex justify-between text-sm mb-1"><span>Returned</span><span class="text-muted">${LOANS.filter(l=>l.returned).length}</span></div><div class="progress-bar"><div class="progress-fill bg-muted" style="width:${LOANS.length?LOANS.filter(l=>l.returned).length/LOANS.length*100:0}%"></div></div></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function adminInventory(){
+  const cats=['All',...new Set(BOOKS.map(b=>b.category))];
+  const filtered=BOOKS.filter(b=>{
+    if(state.inventoryFilter!=='All'&&b.category!==state.inventoryFilter)return false;
+    if(state.searchQuery&&!b.title.toLowerCase().includes(state.searchQuery.toLowerCase())&&!b.author.toLowerCase().includes(state.searchQuery.toLowerCase()))return false;
+    return true;
+  });
+  return `
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="serif text-2xl">Inventory Manager</h2>
+    <button id="addBookBtn" class="btn-primary flex items-center gap-2"><i data-lucide="plus" style="width:16px;height:16px"></i>Add Book</button>
+  </div>
+  <div class="flex gap-3 mb-5">
+    <div class="relative flex-1"><i data-lucide="search" style="width:16px;height:16px" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted"></i><input id="invSearch" placeholder="Search books or authors..." class="w-full pl-10" value="${state.searchQuery}"></div>
+    <select id="invFilter" class="w-48">${cats.map(c=>`<option ${state.inventoryFilter===c?'selected':''}>${c}</option>`).join('')}</select>
+  </div>
+  <div class="card overflow-hidden p-0">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-surface text-muted text-left">
+        <th class="p-3">Title</th><th class="p-3">Author</th><th class="p-3">Category</th><th class="p-3">Stock</th><th class="p-3">Demand</th><th class="p-3">Actions</th>
+      </tr></thead>
+      <tbody>${filtered.map(b=>`
+        <tr class="border-b border-surface/50 hover:bg-surface/30 transition">
+          <td class="p-3 font-medium">${b.title}</td>
+          <td class="p-3 text-muted">${b.author}</td>
+          <td class="p-3"><span class="badge bg-surface text-muted">${b.category}</span></td>
+          <td class="p-3"><span class="${b.stock===0?'text-danger font-bold':b.stock<=2?'text-accent':'text-success'}">${b.stock}/${b.totalCopies}</span></td>
+          <td class="p-3"><div class="flex items-center gap-2"><div class="progress-bar w-16"><div class="progress-fill ${b.demand>80?'bg-danger':b.demand>50?'bg-accent':'bg-success'}" style="width:${b.demand}%"></div></div><span class="text-xs text-muted">${b.demand}%</span></div></td>
+          <td class="p-3 flex gap-2"><button class="text-muted hover:text-accent transition" title="Edit"><i data-lucide="edit" style="width:15px;height:15px"></i></button><button data-delete="${b.id}" class="text-muted hover:text-danger transition" title="Remove"><i data-lucide="trash-2" style="width:15px;height:15px"></i></button></td>
+        </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function adminBorrowers(){
+  const active=LOANS.filter(l=>!l.returned);
+  return `
+  <h2 class="serif text-2xl mb-6">Active Borrowers</h2>
+  <div class="card p-2 mb-4 bg-surface/50 text-sm flex items-center gap-2"><i data-lucide="shield-alert" style="width:16px;height:16px" class="text-accent"></i><span><strong class="text-accent">Fine Blocker:</strong> Students with fines ≥ $30 are automatically blocked from new borrowing until cleared.</span></div>
+  <div class="card overflow-hidden p-0">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-surface text-muted text-left">
+        <th class="p-3">Student</th><th class="p-3">Book</th><th class="p-3">Borrowed</th><th class="p-3">Due</th><th class="p-3">Status</th><th class="p-3">Renewals</th>
+      </tr></thead>
+      <tbody>${active.map(l=>{
+        const b=getBook(l.bookId),s=getStudent(l.studentId),od=isOverdue(l);
+        return `<tr class="border-b border-surface/50">
+          <td class="p-3"><div class="font-medium">${s?.name||'—'}</div><div class="text-muted text-xs">${s?.dept||''}</div></td>
+          <td class="p-3">${b?.title||'—'}</td>
+          <td class="p-3 text-muted">${l.borrowDate}</td>
+          <td class="p-3 ${od?'text-danger font-bold':''}">${l.dueDate}</td>
+          <td class="p-3">${s?.blocked?'<span class="badge bg-danger/20 text-danger">Blocked</span>':od?'<span class="badge bg-danger/20 text-danger">Overdue</span>':'<span class="badge bg-success/20 text-success">Active</span>'}</td>
+          <td class="p-3">${l.renewed}/2</td>
+        </tr>`;}).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function adminFines(){
+  const studentsWithFines=STUDENTS.filter(s=>s.fines>0);
+  const totalFines=STUDENTS.reduce((a,s)=>a+s.fines,0);
+  return `
+  <h2 class="serif text-2xl mb-6">Fine Clearance</h2>
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="card"><div class="text-muted text-xs mb-1">Total Outstanding</div><div class="text-2xl font-bold text-accent">$${totalFines.toFixed(2)}</div></div>
+    <div class="card"><div class="text-muted text-xs mb-1">Students with Fines</div><div class="text-2xl font-bold">${studentsWithFines.length}</div></div>
+    <div class="card"><div class="text-muted text-xs mb-1">Blocked Accounts</div><div class="text-2xl font-bold text-danger">${STUDENTS.filter(s=>s.blocked).length}</div></div>
+  </div>
+  <div class="card overflow-hidden p-0">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-surface text-muted text-left">
+        <th class="p-3">Student</th><th class="p-3">Department</th><th class="p-3">Fine Amount</th><th class="p-3">Status</th><th class="p-3">Actions</th>
+      </tr></thead>
+      <tbody>${studentsWithFines.map(s=>`
+        <tr class="border-b border-surface/50">
+          <td class="p-3 font-medium">${s.name}</td>
+          <td class="p-3 text-muted">${s.dept}</td>
+          <td class="p-3 text-accent font-bold">$${s.fines.toFixed(2)}</td>
+          <td class="p-3">${s.blocked?'<span class="badge bg-danger/20 text-danger">Blocked</span>':'<span class="badge bg-accent/20 text-accent">Pending</span>'}</td>
+          <td class="p-3"><button data-clearfine="${s.id}" class="btn-primary text-xs py-1 px-3">Clear Fine</button></td>
+        </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function adminAnalytics(){
+  const maxLoans=Math.max(...ANALYTICS_MONTHLY.map(m=>m.loans));
+  const topTopics=[{topic:'Machine Learning',count:87},{topic:'Organic Chemistry',count:64},{topic:'Microeconomics',count:58},{topic:'Molecular Biology',count:42}];
+  const segments=[{label:'Undergrad',pct:62,color:'accent'},{label:'Postgrad',pct:28,color:'info'},{label:'Faculty',pct:10,color:'success'}];
+  return `
+  <h2 class="serif text-2xl mb-6">Analytics Dashboard</h2>
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="card col-span-2">
+      <h3 class="serif text-lg mb-4">Monthly Borrowing Trends</h3>
+      <div class="flex items-end gap-3 h-40">${ANALYTICS_MONTHLY.map(m=>`
+        <div class="flex-1 flex flex-col items-center gap-1">
+          <div class="text-xs text-muted">${m.loans}</div>
+          <div class="w-full chart-bar bg-accent/80" style="height:${m.loans/maxLoans*100}%"></div>
+          <div class="text-xs text-muted">${m.month}</div>
+        </div>`).join('')}</div>
+    </div>
+    <div class="card">
+      <h3 class="serif text-lg mb-4">User Segments</h3>
+      <div class="space-y-3">${segments.map(s=>`
+        <div><div class="flex justify-between text-sm mb-1"><span>${s.label}</span><span class="text-${s.color}">${s.pct}%</span></div>
+        <div class="progress-bar"><div class="progress-fill bg-${s.color}" style="width:${s.pct}%"></div></div></div>`).join('')}</div>
+    </div>
+  </div>
+  <div class="grid grid-cols-2 gap-4">
+    <div class="card">
+      <h3 class="serif text-lg mb-3">Top Research Topics</h3>
+      ${topTopics.map((t,i)=>`
+        <div class="flex items-center gap-3 py-2 border-b border-surface/50 last:border-0">
+          <span class="w-6 h-6 rounded-full bg-accent/20 text-accent text-xs flex items-center justify-center font-bold">${i+1}</span>
+          <span class="flex-1">${t.topic}</span>
+          <span class="text-muted text-sm">${t.count} searches</span>
+        </div>`).join('')}
+    </div>
+    <div class="card">
+      <h3 class="serif text-lg mb-3">Engagement Summary</h3>
+      <div class="space-y-4 text-sm">
+        <div class="flex justify-between"><span class="text-muted">Avg. session duration</span><span>24 min</span></div>
+        <div class="flex justify-between"><span class="text-muted">Books per student (avg)</span><span>3.2</span></div>
+        <div class="flex justify-between"><span class="text-muted">Search-to-borrow rate</span><span class="text-success">68%</span></div>
+        <div class="flex justify-between"><span class="text-muted">Return on-time rate</span><span class="text-accent">82%</span></div>
+        <div class="flex justify-between"><span class="text-muted">AI Helper interactions/week</span><span>147</span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function adminDemand(){
+  const sorted=[...BOOKS].sort((a,b)=>b.demandScore-a.demandScore);
+  return `
+  <h2 class="serif text-2xl mb-2">Demand Predictor</h2>
+  <p class="text-muted text-sm mb-6">AI-forecast scores based on exam schedules, course enrollment, and historical borrowing patterns.</p>
+  <div class="card overflow-hidden p-0">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-surface text-muted text-left">
+        <th class="p-3">Book</th><th class="p-3">Category</th><th class="p-3">Demand Score</th><th class="p-3">Exam Impact</th><th class="p-3">Current Stock</th><th class="p-3">Recommendation</th>
+      </tr></thead>
+      <tbody>${sorted.map(b=>{
+        const rec=b.demandScore>85&&b.stock<=2?'Restock Urgently':b.demandScore>70&&b.stock<=3?'Consider Restock':'Adequate';
+        const recColor=rec.includes('Urgently')?'danger':rec.includes('Consider')?'accent':'success';
+        return `<tr class="border-b border-surface/50">
+          <td class="p-3 font-medium">${b.title}</td>
+          <td class="p-3 text-muted">${b.category}</td>
+          <td class="p-3"><div class="flex items-center gap-2"><div class="progress-bar w-20"><div class="progress-fill ${b.demandScore>80?'bg-danger':b.demandScore>50?'bg-accent':'bg-success'}" style="width:${b.demandScore}%"></div></div><span class="font-bold">${b.demandScore}</span></div></td>
+          <td class="p-3"><span class="badge ${b.examSeasonImpact==='Very High'?'bg-danger/20 text-danger':b.examSeasonImpact==='High'?'bg-accent/20 text-accent':'bg-surface text-muted'}">${b.examSeasonImpact}</span></td>
+          <td class="p-3">${b.stock}/${b.totalCopies}</td>
+          <td class="p-3"><span class="text-${recColor} font-medium">${rec}</span></td>
+        </tr>`;}).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function adminNotifications(){
+  return `
+  <h2 class="serif text-2xl mb-6">Notification Center</h2>
+  <div class="space-y-3">${NOTIFICATIONS.map(n=>{
+    const icons={due:'clock',stock:'package',overdue:'alert-triangle',system:'server'};
+    const colors={due:'info',stock:'accent',overdue:'danger',system:'muted'};
+    return `
+    <div class="card flex items-start gap-4 ${n.read?'opacity-60':''}">
+      <div class="w-9 h-9 rounded-lg bg-${colors[n.type]}/10 flex items-center justify-center flex-shrink-0"><i data-lucide="${icons[n.type]}" style="width:18px;height:18px" class="text-${colors[n.type]}"></i></div>
+      <div class="flex-1"><div class="text-sm">${n.msg}</div><div class="text-muted text-xs mt-1">${n.time}</div></div>
+      ${!n.read?`<button data-markread="${n.id}" class="text-xs text-accent hover:underline">Mark read</button>`:''}
+    </div>`;}).join('')}
+  </div>`;
+}
+
+function addBookModal(){
+  return `<div class="modal-backdrop" id="modalBackdrop">
+    <div class="card w-full max-w-lg fade-in">
+      <h3 class="serif text-xl mb-4">Add New Book</h3>
+      <form id="addBookForm" class="space-y-3">
+        <div><label class="text-xs text-muted block mb-1" for="nb-title">Title</label><input id="nb-title" class="w-full" required></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-muted block mb-1" for="nb-author">Author</label><input id="nb-author" class="w-full" required></div>
+          <div><label class="text-xs text-muted block mb-1" for="nb-cat">Category</label><input id="nb-cat" class="w-full" required></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs text-muted block mb-1" for="nb-isbn">ISBN</label><input id="nb-isbn" class="w-full" required></div>
+          <div><label class="text-xs text-muted block mb-1" for="nb-copies">Copies</label><input id="nb-copies" type="number" min="1" value="1" class="w-full" required></div>
+        </div>
+        <div class="flex gap-3 justify-end pt-2">
+          <button type="button" id="closeModal" class="btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Add Book</button>
+        </div>
+      </form>
+    </div>
+  </div>`;
+}
+
+function fineModal(){
+  const s=getStudent(state.showFineModal);
+  if(!s)return '';
+  return `<div class="modal-backdrop" id="modalBackdrop">
+    <div class="card w-full max-w-sm fade-in text-center">
+      <h3 class="serif text-xl mb-2">Clear Fine</h3>
+      <p class="text-muted text-sm mb-4">Mark <strong>${s.name}</strong>'s fine of <strong class="text-accent">$${s.fines.toFixed(2)}</strong> as paid?</p>
+      <div class="flex gap-3 justify-center">
+        <button id="closeModal" class="btn-secondary">Cancel</button>
+        <button id="confirmClearFine" class="btn-primary">Confirm Payment</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ===== STUDENT =====
+function renderStudent(){
+  const pages={home:studentHome,search:studentSearch,loans:studentLoans,research:studentResearch,ai:studentAI,ar:studentAR,account:studentAccount};
+  const menuItems=[
+    {key:'home',icon:'home',label:'Home'},
+    {key:'search',icon:'search',label:'Semantic Search'},
+    {key:'loans',icon:'book-open',label:'My Loans'},
+    {key:'research',icon:'flask-conical',label:'Research Tracker'},
+    {key:'ai',icon:'bot',label:'AI Helper'},
+    {key:'ar',icon:'map-pin',label:'AR Navigator'},
+    {key:'account',icon:'user',label:'My Account'},
+  ];
+  const s=state.currentStudent;
+  return `
+  <div class="h-full flex flex-col bg-white">
+    <header class="border-b border-slate bg-white px-6 py-4">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-4">
+          <div class="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-accent font-bold">${s.name.charAt(0)}</div>
+          <div>
+            <h1 class="text-accent text-2xl serif tracking-wide" id="appTitle">${getConfig().app_title}</h1>
+            <p class="text-muted text-xs">${s.name} • ${s.dept}</p>
+          </div>
+        </div>
+        <button id="switchRole" class="btn-secondary text-xs flex items-center gap-2"><i data-lucide="repeat" style="width:14px;height:14px"></i>Switch to Admin</button>
+      </div>
+      <nav class="flex gap-2 border-t border-slate/50 pt-3 -mx-6 px-6 overflow-x-auto">
+        ${menuItems.map(m=>`
+          <button data-snav="${m.key}" class="tab-btn ${state.studentPage===m.key?'active':''}">
+            ${m.label}
+          </button>`).join('')}
+      </nav>
+    </header>
+    <main class="flex-1 overflow-y-auto p-6 bg-white fade-in">${(pages[state.studentPage]||studentHome)()}</main>
+  </div>
+  ${state.showToast?toast():''}`;
+}
+
+function studentHome(){
+  const s=state.currentStudent;
+  const myLoans=LOANS.filter(l=>l.studentId===s.id&&!l.returned);
+  const dueSoon=myLoans.filter(l=>daysUntilDue(l)<=3&&daysUntilDue(l)>=0);
+  return `
+  <h2 class="serif text-2xl mb-6">Welcome back, ${s.name.split(' ')[0]}</h2>
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="card"><div class="text-muted text-xs mb-1">Active Loans</div><div class="text-2xl font-bold">${myLoans.length}</div></div>
+    <div class="card"><div class="text-muted text-xs mb-1">Account Standing</div><div class="text-2xl font-bold ${s.blocked?'text-danger':s.fines>0?'text-accent':'text-success'}">${s.standing}</div></div>
+    <div class="card"><div class="text-muted text-xs mb-1">Outstanding Fines</div><div class="text-2xl font-bold ${s.fines>0?'text-accent':'text-success'}">$${s.fines.toFixed(2)}</div></div>
+  </div>
+  ${dueSoon.length?`<div class="card mb-6 border-accent/30">
+    <h3 class="serif text-lg mb-3 flex items-center gap-2"><i data-lucide="alert-triangle" style="width:18px;height:18px" class="text-accent"></i>Due Soon</h3>
+    ${dueSoon.map(l=>{const b=getBook(l.bookId);return `<div class="flex items-center justify-between py-2 border-b border-surface/50 last:border-0"><span>${b?.title}</span><span class="text-accent text-sm font-medium">${daysUntilDue(l)} day${daysUntilDue(l)!==1?'s':''} left</span></div>`}).join('')}
+  </div>`:''}
+  <div class="grid grid-cols-3 gap-3">
+    <button data-snav="search" class="card hover:border-accent/30 transition text-left"><i data-lucide="search" style="width:20px;height:20px" class="text-accent mb-2"></i><div class="font-medium text-sm">Search Books</div><div class="text-muted text-xs">Semantic & topic search</div></button>
+    <button data-snav="ai" class="card hover:border-accent/30 transition text-left"><i data-lucide="bot" style="width:20px;height:20px" class="text-accent mb-2"></i><div class="font-medium text-sm">AI Helper</div><div class="text-muted text-xs">Research assistance</div></button>
+    <button data-snav="ar" class="card hover:border-accent/30 transition text-left"><i data-lucide="map-pin" style="width:20px;height:20px" class="text-accent mb-2"></i><div class="font-medium text-sm">Find a Book</div><div class="text-muted text-xs">AR shelf navigation</div></button>
+  </div>`;
+}
+
+function studentSearch(){
+  let resultsHtml='';
+  if(state.semanticResults){
+    const r=state.semanticResults;
+    resultsHtml=`
+    <div class="mb-4"><span class="badge bg-accent/20 text-accent">Topic Cluster: ${r.topic}</span></div>
+    <div class="grid grid-cols-2 gap-3 mb-4">${r.books.map(id=>{const b=getBook(id);return b?`
+      <div class="card flex gap-3">
+        <div class="w-10 h-14 rounded bg-accent/10 flex items-center justify-center flex-shrink-0"><i data-lucide="book-open" style="width:18px;height:18px" class="text-accent"></i></div>
+        <div><div class="font-medium text-sm">${b.title}</div><div class="text-muted text-xs">${b.author}</div><div class="text-xs mt-1 ${b.stock>0?'text-success':'text-danger'}">${b.stock>0?b.stock+' available':'Out of stock'}</div></div>
+      </div>`:''}).join('')}</div>
+    <div class="card"><h4 class="text-sm font-medium mb-2">Related Topics</h4><div class="flex flex-wrap gap-2">${r.related.map(t=>`<button data-stag="${t}" class="badge bg-surface text-muted hover:text-accent hover:bg-accent/10 cursor-pointer transition">${t}</button>`).join('')}</div></div>`;
+  }
+  return `
+  <h2 class="serif text-2xl mb-2">Semantic Search</h2>
+  <p class="text-muted text-sm mb-5">Search by topic, concept, or research area — results are grouped by theme.</p>
+  <div class="flex gap-3 mb-6">
+    <input id="semanticInput" placeholder="e.g., machine learning, biochemistry, microeconomics..." class="flex-1" value="${state.semanticQuery}">
+    <button id="semanticSearchBtn" class="btn-primary">Search</button>
+  </div>
+  ${resultsHtml||'<div class="card text-center py-12 text-muted"><i data-lucide="search" style="width:32px;height:32px" class="mx-auto mb-3 opacity-50"></i><p>Enter a topic to discover related books and research materials</p></div>'}`;
+}
+
+function studentLoans(){
+  const s=state.currentStudent;
+  const active=LOANS.filter(l=>l.studentId===s.id&&!l.returned);
+  const history=LOANS.filter(l=>l.studentId===s.id&&l.returned);
+  return `
+  <h2 class="serif text-2xl mb-6">My Loans & History</h2>
+  <h3 class="serif text-lg mb-3">Active Loans</h3>
+  ${active.length?`<div class="space-y-3 mb-6">${active.map(l=>{const b=getBook(l.bookId);const od=isOverdue(l);return `
+    <div class="card flex items-center gap-4">
+      <div class="w-12 h-16 rounded bg-accent/10 flex items-center justify-center flex-shrink-0"><i data-lucide="book-open" style="width:20px;height:20px" class="text-accent"></i></div>
+      <div class="flex-1">
+        <div class="font-medium">${b?.title||'—'}</div>
+        <div class="text-muted text-xs">Due: <span class="${od?'text-danger font-bold':''}">${l.dueDate}</span> · Renewed: ${l.renewed}/2</div>
+      </div>
+      ${l.renewed<2&&!od?`<button data-renew="${l.id}" class="btn-secondary text-xs">Renew</button>`:''}
+      ${od?'<span class="badge bg-danger/20 text-danger">Overdue</span>':''}
+    </div>`}).join('')}</div>`:'<p class="text-muted text-sm mb-6">No active loans.</p>'}
+  <h3 class="serif text-lg mb-3">Borrowing History</h3>
+  ${history.length?`<div class="space-y-2">${history.map(l=>{const b=getBook(l.bookId);return `
+    <div class="card flex items-center gap-4 opacity-70">
+      <i data-lucide="check-circle" style="width:18px;height:18px" class="text-success"></i>
+      <div class="flex-1"><span class="text-sm">${b?.title||'—'}</span></div>
+      <span class="text-muted text-xs">Returned</span>
+    </div>`}).join('')}</div>`:'<p class="text-muted text-sm">No history yet.</p>'}
+  <h3 class="serif text-lg mt-6 mb-3">Stock Subscriptions</h3>
+  <div class="space-y-2">${state.studentSubscriptions.map(id=>{const b=getBook(id);return b?`
+    <div class="card flex items-center gap-4">
+      <i data-lucide="bell" style="width:16px;height:16px" class="text-accent"></i>
+      <span class="flex-1 text-sm">${b.title} <span class="text-xs text-muted">(${b.stock>0?'In stock now':'Waiting'})</span></span>
+      <button data-unsub="${id}" class="text-xs text-muted hover:text-danger">Unsubscribe</button>
+    </div>`:''}).join('')}
+  </div>`;
+}
+
+function studentResearch(){
+  return `
+  <h2 class="serif text-2xl mb-2">Research Tracker</h2>
+  <p class="text-muted text-sm mb-6">Track your research progress through each phase with milestone goals.</p>
+  <div class="space-y-4">${RESEARCH_PHASES.map(r=>`
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-medium flex items-center gap-2">${r.progress===100?'<i data-lucide="check-circle" style="width:16px;height:16px" class="text-success"></i>':r.progress>0?'<i data-lucide="loader" style="width:16px;height:16px" class="text-accent"></i>':'<i data-lucide="circle" style="width:16px;height:16px" class="text-muted"></i>'} ${r.phase}</h4>
+        <span class="text-sm font-bold ${r.progress===100?'text-success':r.progress>0?'text-accent':'text-muted'}">${r.progress}%</span>
+      </div>
+      <div class="progress-bar mb-2"><div class="progress-fill ${r.progress===100?'bg-success':'bg-accent'}" style="width:${r.progress}%"></div></div>
+      <div class="text-xs text-muted"><strong>Milestone:</strong> ${r.milestone}</div>
+      ${r.notes?`<div class="text-xs text-muted mt-1"><strong>Notes:</strong> ${r.notes}</div>`:''}
+    </div>`).join('')}</div>`;
+}
+
+function studentAI(){
+  const quickPrompts=['Help me refine my research question','Which databases should I search?','Suggest related keywords','How do I structure a literature review?'];
+  return `
+  <h2 class="serif text-2xl mb-2">AI Research Helper</h2>
+  <p class="text-muted text-sm mb-5">Get assistance with research formulation, database selection, and search strategies.</p>
+  <div class="card flex flex-col" style="height:55%">
+    <div class="flex-1 overflow-y-auto space-y-3 mb-4 pr-2" id="aiChat">
+      ${state.aiChatMessages.map(m=>`
+        <div class="flex ${m.role==='user'?'justify-end':'justify-start'}">
+          <div class="${m.role==='user'?'bg-accent/20 text-bright':'bg-surface text-bright'} rounded-xl px-4 py-2.5 max-w-[80%] text-sm">${m.text}</div>
+        </div>`).join('')}
+    </div>
+    <div class="flex gap-2">
+      <input id="aiInput" placeholder="Ask me anything about your research..." class="flex-1" value="${state.aiInput}">
+      <button id="aiSendBtn" class="btn-primary px-4"><i data-lucide="send" style="width:16px;height:16px"></i></button>
+    </div>
+  </div>
+  <div class="flex flex-wrap gap-2 mt-4">${quickPrompts.map(p=>`<button data-aiprompt="${p}" class="badge bg-surface text-muted hover:text-accent hover:bg-accent/10 cursor-pointer transition text-xs py-1.5">${p}</button>`).join('')}</div>`;
+}
+
+function studentAR(){
+  const floors=[1,2,3];
+  const shelves={1:['CH-05','BI-08','BI-02'],2:['CS-12','CS-14','MA-03'],3:['EC-01','HI-11']};
+  const sel=state.arSelectedBook;const selBook=sel?getBook(sel):null;
+  return `
+  <h2 class="serif text-2xl mb-2">AR Navigator</h2>
+  <p class="text-muted text-sm mb-5">Select a book to see its shelf location highlighted on the floor map.</p>
+  <div class="flex gap-3 mb-5">
+    <select id="arBookSelect" class="flex-1">
+      <option value="">Select a book to locate...</option>
+      ${BOOKS.map(b=>`<option value="${b.id}" ${sel===b.id?'selected':''}>${b.title}</option>`).join('')}
+    </select>
+  </div>
+  <div class="grid grid-cols-3 gap-4">
+    ${floors.map(f=>`
+      <div class="card">
+        <h4 class="serif text-base mb-3">Floor ${f}</h4>
+        <div class="grid grid-cols-3 gap-2">${(shelves[f]||[]).map(sh=>{
+          const isHighlighted=selBook&&selBook.location.shelf===sh;
+          return `<div class="shelf-spot ${isHighlighted?'highlighted':''} rounded-lg p-3 text-center text-xs font-medium ${isHighlighted?'bg-accent/30 text-accent border border-accent':'bg-surface text-muted'}">${sh}${isHighlighted?'<div class="text-[10px] mt-1">Row '+selBook.location.row+'</div>':''}</div>`;
+        }).join('')}</div>
+      </div>`).join('')}
+  </div>
+  ${selBook?`<div class="card mt-4 flex items-center gap-4 border-accent/30">
+    <i data-lucide="map-pin" style="width:24px;height:24px" class="text-accent"></i>
+    <div><div class="font-medium">${selBook.title}</div><div class="text-muted text-sm">Floor ${selBook.location.floor} → Shelf ${selBook.location.shelf} → Row ${selBook.location.row}</div></div>
+  </div>`:''}`;
+}
+
+function studentAccount(){
+  const s=state.currentStudent;
+  return `
+  <h2 class="serif text-2xl mb-6">My Account</h2>
+  <div class="grid grid-cols-2 gap-4">
+    <div class="card">
+      <h3 class="serif text-lg mb-4">Profile</h3>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between"><span class="text-muted">Name</span><span>${s.name}</span></div>
+        <div class="flex justify-between"><span class="text-muted">Email</span><span>${s.email}</span></div>
+        <div class="flex justify-between"><span class="text-muted">Department</span><span>${s.dept}</span></div>
+        <div class="flex justify-between"><span class="text-muted">Student ID</span><span>${s.id}</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="serif text-lg mb-4">Account Standing</h3>
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-14 h-14 rounded-xl ${s.blocked?'bg-danger/20':'s.fines>0'?'bg-accent/20':'bg-success/20'} flex items-center justify-center">
+          <i data-lucide="${s.blocked?'shield-x':s.fines>0?'alert-triangle':'shield-check'}" style="width:28px;height:28px" class="${s.blocked?'text-danger':s.fines>0?'text-accent':'text-success'}"></i>
+        </div>
+        <div><div class="text-xl font-bold ${s.blocked?'text-danger':s.fines>0?'text-accent':'text-success'}">${s.standing}</div><div class="text-muted text-xs">${s.blocked?'Borrowing privileges suspended':'Active borrowing privileges'}</div></div>
+      </div>
+      <div class="flex justify-between text-sm"><span class="text-muted">Outstanding Fines</span><span class="${s.fines>0?'text-accent font-bold':'text-success'}">$${s.fines.toFixed(2)}</span></div>
+    </div>
+  </div>
+  <div class="card mt-4">
+    <h3 class="serif text-lg mb-4">Notification Preferences</h3>
+    <div class="space-y-3">${[
+      {key:'dueReminders',label:'Due Date Reminders',desc:'Get notified before your books are due'},
+      {key:'stockAlerts',label:'Stock Alerts',desc:'Notifications when subscribed books become available'},
+      {key:'systemUpdates',label:'System Updates',desc:'Library system announcements and changes'},
+    ].map(p=>`
+      <div class="flex items-center justify-between py-2 border-b border-surface/50 last:border-0">
+        <div><div class="text-sm font-medium">${p.label}</div><div class="text-muted text-xs">${p.desc}</div></div>
+        <button data-togglepref="${p.key}" class="w-11 h-6 rounded-full transition relative ${state.notifPrefs[p.key]?'bg-accent':'bg-surface'}">
+          <div class="w-5 h-5 rounded-full bg-white absolute top-0.5 transition-all ${state.notifPrefs[p.key]?'left-5.5':'left-0.5'}" style="${state.notifPrefs[p.key]?'left:22px':'left:2px'}"></div>
+        </button>
+      </div>`).join('')}</div>
+  </div>`;
+}
+
+function toast(){
+  return `<div class="toast ${state.toastType==='success'?'bg-success text-ink':'bg-danger text-white'}">${state.toastMsg}</div>`;
+}
+
+// ===== EVENTS =====
+function attachEvents(){
+  document.querySelectorAll('[data-nav]').forEach(el=>el.onclick=()=>{state.adminPage=el.dataset.nav;render()});
+  document.querySelectorAll('[data-snav]').forEach(el=>el.onclick=()=>{state.studentPage=el.dataset.snav;render()});
+  const sr=document.getElementById('switchRole');
+  if(sr)sr.onclick=()=>{state.role=state.role==='admin'?'student':'admin';render()};
+
+  const invSearch=document.getElementById('invSearch');
+  if(invSearch)invSearch.oninput=e=>{state.searchQuery=e.target.value;render();setTimeout(()=>{const el=document.getElementById('invSearch');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length)}},0)};
+  const invFilter=document.getElementById('invFilter');
+  if(invFilter)invFilter.onchange=e=>{state.inventoryFilter=e.target.value;render()};
+
+  const addBtn=document.getElementById('addBookBtn');
+  if(addBtn)addBtn.onclick=()=>{state.showAddBookModal=true;render()};
+
+  const closeModal=document.getElementById('closeModal');
+  if(closeModal)closeModal.onclick=()=>{state.showAddBookModal=false;state.showFineModal=null;render()};
+  const backdrop=document.getElementById('modalBackdrop');
+  if(backdrop)backdrop.onclick=e=>{if(e.target===backdrop){state.showAddBookModal=false;state.showFineModal=null;render()}};
+
+  const addForm=document.getElementById('addBookForm');
+  if(addForm)addForm.onsubmit=e=>{
+    e.preventDefault();
+    const t=document.getElementById('nb-title').value,a=document.getElementById('nb-author').value,c=document.getElementById('nb-cat').value,isbn=document.getElementById('nb-isbn').value,copies=parseInt(document.getElementById('nb-copies').value);
+    BOOKS.push({id:'B'+String(BOOKS.length+1).padStart(3,'0'),title:t,author:a,category:c,isbn,stock:copies,totalCopies:copies,demand:0,location:{floor:1,shelf:'NEW',row:1},demandScore:10,examSeasonImpact:'Low'});
+    state.showAddBookModal=false;showToast('Book added successfully!');
+  };
+
+  document.querySelectorAll('[data-clearfine]').forEach(el=>el.onclick=()=>{state.showFineModal=el.dataset.clearfine;render()});
+  const confirmClear=document.getElementById('confirmClearFine');
+  if(confirmClear)confirmClear.onclick=()=>{
+    const s=getStudent(state.showFineModal);
+    if(s){s.fines=0;s.blocked=false;s.standing='Good';state.showFineModal=null;showToast('Fine cleared successfully!')}
+  };
+
+  document.querySelectorAll('[data-delete]').forEach(el=>el.onclick=()=>{
+    const idx=BOOKS.findIndex(b=>b.id===el.dataset.delete);
+    if(idx>-1){BOOKS.splice(idx,1);showToast('Book removed','success')}
+  });
+
+  document.querySelectorAll('[data-markread]').forEach(el=>el.onclick=()=>{
+    const n=NOTIFICATIONS.find(n=>n.id===el.dataset.markread);
+    if(n){n.read=true;render()}
+  });
+
+  // Student events
+  const semBtn=document.getElementById('semanticSearchBtn');
+  const semInput=document.getElementById('semanticInput');
+  if(semBtn)semBtn.onclick=()=>{
+    const q=(semInput?.value||'').toLowerCase().trim();
+    state.semanticQuery=q;
+    const match=Object.entries(TOPIC_CLUSTERS).find(([k])=>q.includes(k));
+    state.semanticResults=match?{topic:match[0],...match[1]}:null;
+    if(!match&&q)state.semanticResults={topic:q,books:BOOKS.filter(b=>b.title.toLowerCase().includes(q)||b.category.toLowerCase().includes(q)).map(b=>b.id).slice(0,4),related:['related topic 1','related topic 2']};
+    render();
+  };
+  document.querySelectorAll('[data-stag]').forEach(el=>el.onclick=()=>{state.semanticQuery=el.dataset.stag;state.semanticResults=null;render();document.getElementById('semanticSearchBtn')?.click()});
+
+  document.querySelectorAll('[data-renew]').forEach(el=>el.onclick=()=>{
+    const l=LOANS.find(l=>l.id===el.dataset.renew);
+    if(l&&l.renewed<2){l.renewed++;const d=new Date(l.dueDate);d.setDate(d.getDate()+14);l.dueDate=d.toISOString().split('T')[0];showToast('Loan renewed! New due date: '+l.dueDate)}
+  });
+
+  document.querySelectorAll('[data-unsub]').forEach(el=>el.onclick=()=>{
+    state.studentSubscriptions=state.studentSubscriptions.filter(id=>id!==el.dataset.unsub);showToast('Unsubscribed');
+  });
+
+  const aiSend=document.getElementById('aiSendBtn');
+  const aiIn=document.getElementById('aiInput');
+  if(aiSend)aiSend.onclick=()=>sendAI();
+  if(aiIn)aiIn.onkeydown=e=>{if(e.key==='Enter')sendAI()};
+  document.querySelectorAll('[data-aiprompt]').forEach(el=>el.onclick=()=>{state.aiInput=el.dataset.aiprompt;render();setTimeout(sendAI,50)});
+
+  const arSel=document.getElementById('arBookSelect');
+  if(arSel)arSel.onchange=e=>{state.arSelectedBook=e.target.value||null;render()};
+
+  document.querySelectorAll('[data-togglepref]').forEach(el=>el.onclick=()=>{
+    const k=el.dataset.togglepref;state.notifPrefs[k]=!state.notifPrefs[k];render();
+  });
+}
+
+function sendAI(){
+  const input=document.getElementById('aiInput');
+  const text=(input?.value||state.aiInput||'').trim();
+  if(!text)return;
+  state.aiChatMessages.push({role:'user',text});
+  state.aiInput='';
+  const response=AI_RESPONSES[state.aiChatMessages.filter(m=>m.role==='ai').length%AI_RESPONSES.length];
+  setTimeout(()=>{state.aiChatMessages.push({role:'ai',text:response});render();const chat=document.getElementById('aiChat');if(chat)chat.scrollTop=chat.scrollHeight},600);
+  render();
+}
+
+// ===== CONFIG =====
+const defaultConfig={app_title:'LibConnect Pro',institution_name:'University Library System',background_color:'#ffffff',surface_color:'#f1f5f9',text_color:'#0f172a',primary_action_color:'#2563eb',secondary_action_color:'#64748b',font_family:'DM Sans',font_size:14};
+function getConfig(){return window.elementSdk?.config||defaultConfig}
+
+window.elementSdk.init({
+  defaultConfig,
+  onConfigChange:async(config)=>{
+    document.body.style.background=config.background_color||defaultConfig.background_color;
+    document.body.style.color=config.text_color||defaultConfig.text_color;
+    const font=config.font_family||defaultConfig.font_family;
+    document.body.style.fontFamily=`${font}, DM Sans, sans-serif`;
+    // Re-render to pick up text changes
+    render();
+  },
+  mapToCapabilities:(config)=>({
+    recolorables:[
+      {get:()=>config.background_color||defaultConfig.background_color,set:v=>{config.background_color=v;window.elementSdk.setConfig({background_color:v})}},
+      {get:()=>config.surface_color||defaultConfig.surface_color,set:v=>{config.surface_color=v;window.elementSdk.setConfig({surface_color:v})}},
+      {get:()=>config.text_color||defaultConfig.text_color,set:v=>{config.text_color=v;window.elementSdk.setConfig({text_color:v})}},
+      {get:()=>config.primary_action_color||defaultConfig.primary_action_color,set:v=>{config.primary_action_color=v;window.elementSdk.setConfig({primary_action_color:v})}},
+      {get:()=>config.secondary_action_color||defaultConfig.secondary_action_color,set:v=>{config.secondary_action_color=v;window.elementSdk.setConfig({secondary_action_color:v})}},
+    ],
+    borderables:[],
+    fontEditable:{get:()=>config.font_family||defaultConfig.font_family,set:v=>{config.font_family=v;window.elementSdk.setConfig({font_family:v})}},
+    fontSizeable:{get:()=>config.font_size||defaultConfig.font_size,set:v=>{config.font_size=v;window.elementSdk.setConfig({font_size:v})}},
+  }),
+  mapToEditPanelValues:(config)=>new Map([
+    ['app_title',config.app_title||defaultConfig.app_title],
+    ['institution_name',config.institution_name||defaultConfig.institution_name],
+  ]),
+});
+
+render();
+</script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9ebd2304263a8916',t:'MTc3NjExMTI2My4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

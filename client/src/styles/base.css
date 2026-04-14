@@ -1,0 +1,26 @@
+:root {
+  font-family: "DM Sans", sans-serif;
+  color: #11212d;
+  background: #f4f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "DM Serif Display", serif;
+  margin: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
