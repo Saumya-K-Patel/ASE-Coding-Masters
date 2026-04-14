@@ -560,6 +560,16 @@ thead th {
   font-weight: 600;
 }
 
+.research-form-card {
+  margin-bottom: 14px;
+  background: linear-gradient(135deg, #fffdf7 0%, #f7fbff 100%);
+}
+
+.research-form-card input,
+.research-form-card select {
+  width: 100%;
+}
+
 .muted {
   color: #66798d;
   font-size: 13px;

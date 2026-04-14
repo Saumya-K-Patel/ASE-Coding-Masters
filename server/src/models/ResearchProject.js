@@ -14,6 +14,14 @@ const researchProjectSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     topic: { type: String, required: true },
+    researchQuestion: { type: String, default: "" },
+    methodology: { type: String, default: "" },
+    keywords: [{ type: String }],
+    status: {
+      type: String,
+      enum: ["planning", "literature-review", "drafting", "completed"],
+      default: "planning",
+    },
     milestones: [milestoneSchema],
   },
   { timestamps: true }

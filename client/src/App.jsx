@@ -67,6 +67,10 @@ function formatSearchLabel(value) {
     .join(" ");
 }
 
+function formatProjectStatus(value) {
+  return formatSearchLabel(String(value || "").replace(/-/g, " "));
+}
+
 function uniqueItems(values) {
   const seen = new Set();
   return values.filter((value) => {
@@ -120,6 +124,14 @@ const studentTabs = [
   { key: "account", label: "My Account" },
 ];
 
+const initialResearchForm = {
+  topic: "",
+  researchQuestion: "",
+  methodology: "",
+  keywords: "",
+  status: "planning",
+};
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(null);
@@ -136,6 +148,8 @@ export default function App() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [research, setResearch] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [showResearchForm, setShowResearchForm] = useState(false);
+  const [researchForm, setResearchForm] = useState(initialResearchForm);
 
   const [query, setQuery] = useState("");
   const [semantic, setSemantic] = useState(null);
@@ -484,17 +498,26 @@ export default function App() {
   }
 
   async function addResearch() {
-    const topic = prompt("Research topic");
-    if (!topic) return;
+    if (!researchForm.topic.trim()) {
+      setMessage("Add a research topic before creating the project");
+      return;
+    }
+
     await withAction(async () => {
       await api.post("/research", {
-        topic,
+        topic: researchForm.topic,
+        researchQuestion: researchForm.researchQuestion,
+        methodology: researchForm.methodology,
+        keywords: researchForm.keywords.split(",").map((value) => value.trim()).filter(Boolean),
+        status: researchForm.status,
         milestones: [
           { phase: "Topic Selection", progress: 0, milestone: "Define research scope", notes: "" },
           { phase: "Literature Review", progress: 0, milestone: "Collect 20 papers", notes: "" },
           { phase: "Methodology", progress: 0, milestone: "Draft methods", notes: "" },
         ],
       });
+      setResearchForm(initialResearchForm);
+      setShowResearchForm(false);
       await loadResearch();
     }, "Research project created");
   }
@@ -1595,11 +1618,67 @@ export default function App() {
 
         {!isAdmin && activeTab === "research" ? (
           <section className="panel">
-            <div className="row between"><h2>Research Tracker</h2><button onClick={addResearch}>New Project</button></div>
+            <div className="row between">
+              <h2>Research Tracker</h2>
+              <button onClick={() => setShowResearchForm((prev) => !prev)}>
+                {showResearchForm ? "Close Form" : "New Project"}
+              </button>
+            </div>
+            {showResearchForm ? (
+              <article className="card research-form-card">
+                <div className="stack compact">
+                  <input
+                    value={researchForm.topic}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, topic: e.target.value }))}
+                    placeholder="Topic"
+                  />
+                  <input
+                    value={researchForm.researchQuestion}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, researchQuestion: e.target.value }))}
+                    placeholder="Research question"
+                  />
+                  <input
+                    value={researchForm.methodology}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, methodology: e.target.value }))}
+                    placeholder="Methodology or approach"
+                  />
+                  <input
+                    value={researchForm.keywords}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, keywords: e.target.value }))}
+                    placeholder="Keywords, separated by commas"
+                  />
+                  <select
+                    value={researchForm.status}
+                    onChange={(e) => setResearchForm((prev) => ({ ...prev, status: e.target.value }))}
+                  >
+                    <option value="planning">Planning</option>
+                    <option value="literature-review">Literature Review</option>
+                    <option value="drafting">Drafting</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                  <div className="row">
+                    <button onClick={addResearch}>Create Project</button>
+                    <button className="subtle" onClick={() => setResearchForm(initialResearchForm)}>Reset</button>
+                  </div>
+                </div>
+              </article>
+            ) : null}
             <div className="stack">
               {research.map((project) => (
                 <article key={project._id} className="card">
-                  <h3>{project.topic}</h3>
+                  <div className="row between wrap">
+                    <h3>{project.topic}</h3>
+                    <span className="pill ok">{formatProjectStatus(project.status || "planning")}</span>
+                  </div>
+                  {project.researchQuestion ? <p className="muted">{project.researchQuestion}</p> : null}
+                  {project.methodology ? <p className="muted">Method: {project.methodology}</p> : null}
+                  {(project.keywords || []).length ? (
+                    <div className="row wrap">
+                      {(project.keywords || []).map((keyword) => (
+                        <span key={`${project._id}-${keyword}`} className="term-chip">{keyword}</span>
+                      ))}
+                    </div>
+                  ) : null}
                   {(project.milestones || []).map((m, milestoneIndex) => (
                     <div key={`${project._id}-${m.phase}`} className="milestone-row">
                       <p>{m.phase}</p>
