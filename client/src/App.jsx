@@ -84,6 +84,10 @@ function hasPendingReturn(loan) {
   return loan?.returnRequestStatus === "pending";
 }
 
+function hasRejectedReturn(loan) {
+  return loan?.returnRequestStatus === "rejected";
+}
+
 const adminTabs = [
   { key: "dashboard", label: "Dashboard" },
   { key: "inventory", label: "Inventory" },
@@ -317,8 +321,10 @@ export default function App() {
   }
 
   async function rejectReservation(id) {
+    const reason = window.prompt("Reason for rejecting this reservation?", "Reservation was not approved by the admin.");
+    if (reason === null) return;
     await withAction(async () => {
-      await api.post(`/loans/${id}/reject`);
+      await api.post(`/loans/${id}/reject`, { reason });
       await refreshAll();
     }, "Reservation rejected");
   }
@@ -339,8 +345,10 @@ export default function App() {
   }
 
   async function rejectRenewal(id) {
+    const reason = window.prompt("Reason for rejecting this renewal request?", "Renewal request was not approved.");
+    if (reason === null) return;
     await withAction(async () => {
-      await api.post(`/loans/${id}/renew/reject`);
+      await api.post(`/loans/${id}/renew/reject`, { reason });
       await refreshAll();
     }, "Renewal rejected");
   }
@@ -360,12 +368,33 @@ export default function App() {
     }, "Return processed");
   }
 
-  async function verifyFine(id) {
+  async function rejectReturn(id) {
+    const reason = window.prompt("Reason for rejecting this return request?", "Return request needs more review before processing.");
+    if (reason === null) return;
     await withAction(async () => {
-      await api.post(`/fines/${id}/verify-payment`);
+      await api.post(`/loans/${id}/return/reject`, { reason });
+      await refreshAll();
+    }, "Return request rejected");
+  }
+
+  async function verifyFine(id) {
+    const note = window.prompt("Add an optional payment note for this fine", "");
+    if (note === null) return;
+    await withAction(async () => {
+      await api.post(`/fines/${id}/verify-payment`, { note });
       await loadSession();
       await refreshAll();
     }, "Fine cleared");
+  }
+
+  async function waiveFine(id) {
+    const note = window.prompt("Why are you waiving this fine?", "Fine waived by admin review.");
+    if (note === null) return;
+    await withAction(async () => {
+      await api.post(`/fines/${id}/waive`, { note });
+      await loadSession();
+      await refreshAll();
+    }, "Fine waived");
   }
 
   async function markAlertRead(id) {
@@ -1136,7 +1165,9 @@ export default function App() {
                     <td>
                       {hasPendingRenewal(loan) ? <span className="pill warn">Renewal Request</span> : null}
                       {!hasPendingRenewal(loan) && hasPendingReturn(loan) ? <span className="pill warn">Return Request</span> : null}
-                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) ? <span className="muted">None</span> : null}
+                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && hasRejectedReturn(loan) ? <span className="pill danger">Return Rejected</span> : null}
+                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && !hasRejectedReturn(loan) ? <span className="muted">None</span> : null}
+                      {hasRejectedReturn(loan) && loan.returnRejectionReason ? <div className="muted">Reason: {loan.returnRejectionReason}</div> : null}
                     </td>
                     <td>{loan.renewalCount}/{loan.maxRenewals}</td>
                     <td className="row">
@@ -1147,7 +1178,10 @@ export default function App() {
                         </>
                       ) : null}
                       {isApprovalAdmin && hasPendingReturn(loan) ? (
-                        <button onClick={() => processReturn(loan._id)}>Process Return</button>
+                        <>
+                          <button onClick={() => processReturn(loan._id)}>Process Return</button>
+                          <button className="subtle" onClick={() => rejectReturn(loan._id)}>Reject Return</button>
+                        </>
                       ) : null}
                       {(!isApprovalAdmin || (!hasPendingRenewal(loan) && !hasPendingReturn(loan))) ? <span className="muted">No action</span> : null}
                     </td>
@@ -1175,7 +1209,7 @@ export default function App() {
             </div>
             <table>
               <thead>
-                <tr><th>User</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr>
+                <tr><th>User</th><th>Reason</th><th>Amount</th><th>Status</th><th>Resolution</th><th>Action</th></tr>
               </thead>
               <tbody>
                 {fineRows.map((fine) => (
@@ -1184,10 +1218,14 @@ export default function App() {
                     <td>{fine.reason}</td>
                     <td>${fine.amount.toFixed(2)}</td>
                     <td><span className={`pill ${fine.status === "pending" ? "warn" : "ok"}`}>{fine.status}</span></td>
+                    <td>{fine.resolutionNote || <span className="muted">-</span>}</td>
                     <td>
-                      {fine.status === "pending"
-                        ? <button onClick={() => verifyFine(fine._id)}>Verify Payment</button>
-                        : <span className="muted">Closed</span>}
+                      {fine.status === "pending" ? (
+                        <div className="row">
+                          <button onClick={() => verifyFine(fine._id)}>Verify Payment</button>
+                          {isApprovalAdmin ? <button className="subtle" onClick={() => waiveFine(fine._id)}>Waive</button> : null}
+                        </div>
+                      ) : <span className="muted">Closed</span>}
                     </td>
                   </tr>
                 ))}
@@ -1486,7 +1524,9 @@ export default function App() {
                     <td>
                       {hasPendingRenewal(loan) ? <span className="pill warn">Renewal Pending</span> : null}
                       {!hasPendingRenewal(loan) && hasPendingReturn(loan) ? <span className="pill warn">Return Pending</span> : null}
-                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) ? <span className="muted">No open requests</span> : null}
+                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && hasRejectedReturn(loan) ? <span className="pill danger">Return Rejected</span> : null}
+                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && !hasRejectedReturn(loan) ? <span className="muted">No open requests</span> : null}
+                      {hasRejectedReturn(loan) && loan.returnRejectionReason ? <div className="muted">Reason: {loan.returnRejectionReason}</div> : null}
                     </td>
                     <td className="row">
                       <button disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)} onClick={() => renewLoan(loan._id)}>Request Renewal</button>
