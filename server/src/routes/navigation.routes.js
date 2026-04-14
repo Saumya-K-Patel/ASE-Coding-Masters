@@ -1,3 +1,4 @@
+// AR navigation routes — polished with nearby book discovery
 import express from "express";
 import Book from "../models/Book.js";
 import { authRequired } from "../middleware/auth.js";

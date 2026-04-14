@@ -1,3 +1,4 @@
+// Book inventory routes — enhanced with stats endpoint
 import express from "express";
 import Book from "../models/Book.js";
 import { authRequired } from "../middleware/auth.js";
