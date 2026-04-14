@@ -60,6 +60,13 @@ function formatAiProvider(provider) {
   return provider;
 }
 
+function formatSearchLabel(value) {
+  return String(value || "")
+    .split(" ")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
 function getLoanStatus(loan) {
   if (!loan) return "pending";
   if (loan.status) return loan.status;
@@ -380,6 +387,13 @@ export default function App() {
       const { data } = await api.get("/search/semantic", { params: { q: nextQuery, limit: 20 } });
       setSemantic(data);
     });
+  }
+
+  async function runGuidedSearch(nextQuery) {
+    const trimmed = String(nextQuery || "").trim();
+    if (!trimmed) return;
+    setQuery(trimmed);
+    await semanticSearch(trimmed);
   }
 
   async function runHomeSearch(e) {
@@ -1424,6 +1438,32 @@ export default function App() {
                 <p className="muted">
                   {(semantic.meta?.returned ?? semantic.books?.length ?? 0)} results • {(semantic.meta?.strategy || "search")}
                 </p>
+                {semantic.meta?.plan?.length ? (
+                  <section className="search-guidance-card">
+                    <div className="section-head">
+                      <h3>Search Guide</h3>
+                    </div>
+                    {(semantic.meta.intentLabels || []).length ? (
+                      <div className="row wrap">
+                        {(semantic.meta.intentLabels || []).map((label) => (
+                          <span key={label} className="pill ok">{formatSearchLabel(label)}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="stack compact">
+                      {(semantic.meta.plan || []).map((step) => (
+                        <p key={step} className="muted">{step}</p>
+                      ))}
+                    </div>
+                    {(semantic.meta.expandedTerms || []).length ? (
+                      <div className="row wrap">
+                        {(semantic.meta.expandedTerms || []).map((term) => (
+                          <span key={term} className="term-chip">{term}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
                 {(semantic.books || []).length ? (semantic.books || []).map((book) => (
                   <article key={book._id} className="result-row">
                     <div>
@@ -1436,11 +1476,22 @@ export default function App() {
                     </div>
                   </article>
                 )) : <p className="muted">No matches found. Try a broader topic or related theme.</p>}
+                {(semantic.meta?.suggestedQueries || []).length ? (
+                  <div className="stack compact">
+                    <p className="muted">Try these refined searches next:</p>
+                    <div className="row wrap">
+                      {(semantic.meta.suggestedQueries || []).map((suggestion) => (
+                        <button key={suggestion} className="subtle" onClick={() => runGuidedSearch(suggestion)}>
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="row wrap">
                   {(semantic.relatedThemes || []).map((theme) => (
                     <button key={theme} className="subtle" onClick={() => {
-                      setQuery(theme);
-                      semanticSearch(theme);
+                      runGuidedSearch(theme);
                     }}>{theme}</button>
                   ))}
                 </div>

@@ -542,6 +542,24 @@ thead th {
   font-size: 14px;
 }
 
+.search-guidance-card {
+  border: 1px solid #d9e3f4;
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(135deg, #fffef5 0%, #f6fbff 100%);
+  display: grid;
+  gap: 10px;
+}
+
+.term-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: #2d537f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .muted {
   color: #66798d;
   font-size: 13px;
