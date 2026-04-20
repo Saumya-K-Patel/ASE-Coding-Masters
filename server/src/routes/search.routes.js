@@ -2,6 +2,12 @@ import express from "express";
 import Book from "../models/Book.js";
 import { authRequired } from "../middleware/auth.js";
 import { getBookStock, serializeBook } from "../utils/bookRecord.js";
+import {
+  buildBookRelevance as buildSharedBookRelevance,
+  expandQueryTerms,
+  rankBooksByQuery,
+  toTokenRegex,
+} from "../utils/librarySearch.js";
 
 const router = express.Router();
 
@@ -33,17 +39,15 @@ const STOP_WORDS = new Set([
 ]);
 
 const METHODS_TERMS = ["case study", "qualitative", "quantitative", "survey", "comparative", "literature review"];
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function toTokenRegex(term) {
-  const escaped = escapeRegex(term.trim());
-  if (!escaped) return null;
-  // Use whole-word matching for single tokens to avoid false positives like "story" matching "history".
-  return escaped.includes(" ") ? new RegExp(escaped, "i") : new RegExp(`\\b${escaped}\\b`, "i");
-}
+const MATCHABLE_BOOK_FIELDS = [
+  { label: "title", values: (book) => [book?.title] },
+  { label: "author", values: (book) => [book?.author] },
+  { label: "category", values: (book) => [book?.category] },
+  { label: "subject", values: (book) => [book?.subject] },
+  { label: "semantic topics", values: (book) => book?.semanticTopics || [] },
+  { label: "tags", values: (book) => book?.tags || [] },
+  { label: "course codes", values: (book) => book?.courseCodes || [] },
+];
 
 function normalizeText(text) {
   return String(text || "")
@@ -68,6 +72,18 @@ function uniqueStrings(values) {
     seen.add(key);
     return true;
   });
+}
+
+function joinWithAnd(values) {
+  const items = values.filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function buildBookRelevance(book, query, expandedTerms, score) {
+  return buildSharedBookRelevance(book, query, expandedTerms, score);
 }
 
 function termFreq(tokens) {
@@ -212,28 +228,11 @@ function buildSearchPlan(query, relatedThemes) {
   return uniqueStrings(plan);
 }
 
-function expandedTermsFromQuery(query) {
-  const q = query.toLowerCase().trim();
-  const terms = new Set(q.split(/\s+/).filter(Boolean));
-  terms.add(q);
-
-  Object.entries(TOPIC_SYNONYMS).forEach(([topic, synonyms]) => {
-    const topicMatched = q.includes(topic) || [...terms].some((term) => topic.includes(term));
-    const synonymMatched = synonyms.some((syn) => q.includes(syn) || [...terms].includes(syn));
-    if (topicMatched || synonymMatched) {
-      terms.add(topic);
-      synonyms.forEach((syn) => terms.add(syn));
-    }
-  });
-
-  return [...terms];
-}
-
 router.get("/semantic", authRequired, async (req, res) => {
   const { q = "", limit = 20 } = req.query;
   if (!q.trim()) return res.json({ topic: "", books: [], relatedThemes: [] });
 
-  const expandedTerms = expandedTermsFromQuery(q);
+  const expandedTerms = expandQueryTerms(q);
   const regexes = expandedTerms.map((term) => toTokenRegex(term)).filter(Boolean);
 
   const directCandidates = await Book.find({
@@ -252,92 +251,9 @@ router.get("/semantic", authRequired, async (req, res) => {
 
   const books = directCandidates.length ? directCandidates : await Book.find({}).limit(500);
 
-  const expandedTokens = tokenize(expandedTerms.join(" "));
-  const queryFreq = termFreq(expandedTokens);
-
-  const docs = [];
-  const df = new Map();
-
-  books.forEach((book) => {
-    const tokens = tokenize(weightedBookText(book));
-    const freq = termFreq(tokens);
-    const tokenSet = new Set(tokens);
-    docs.push({ book, freq, tokenSet });
-
-    new Set(tokens).forEach((token) => {
-      df.set(token, (df.get(token) || 0) + 1);
-    });
+  const capped = rankBooksByQuery(q, books, {
+    limit: Number(limit) > 0 ? Math.min(Number(limit), 50) : 20,
   });
-
-  const docCount = Math.max(docs.length, 1);
-  const idf = new Map();
-  df.forEach((value, token) => {
-    idf.set(token, Math.log(1 + docCount / (1 + value)));
-  });
-
-  const ranked = docs
-    .map(({ book, freq, tokenSet }) => {
-      const cosine = cosineSimilarity(queryFreq, freq, idf);
-      const overlap = overlapScore(expandedTokens, tokenSet);
-
-      const phraseBoost = expandedTerms.some((term) => {
-        const rx = toTokenRegex(term);
-        if (!rx) return false;
-        return (
-          rx.test(book.title || "")
-          || rx.test(book.category || "")
-          || (book.semanticTopics || []).some((topic) => rx.test(topic))
-          || (book.tags || []).some((tag) => rx.test(tag))
-        );
-      })
-        ? 0.25
-        : 0;
-
-      const stockBoost = getBookStock(book) > 0 ? 0.05 : 0;
-      const score = cosine * 0.62 + overlap * 0.33 + phraseBoost + stockBoost;
-      return { book, score };
-    })
-    .filter((entry) => entry.score > 0.08)
-    .sort((a, b) => b.score - a.score);
-
-  // Keep only the strongest hit per title/category to avoid repetitive result lists.
-  const uniqueByTitle = new Map();
-  ranked.forEach((entry) => {
-    const key = `${normalizeText(entry.book.title)}::${normalizeText(entry.book.category)}`;
-    if (!uniqueByTitle.has(key)) {
-      uniqueByTitle.set(key, entry);
-    }
-  });
-
-  const deduped = [...uniqueByTitle.values()];
-  const strictShortStory = isShortStoryIntent(q);
-  const strictEconomics = isEconomicsIntent(q);
-  const strictUrbanPoverty = isUrbanPovertyIntent(q);
-  const filtered = strictShortStory
-    ? deduped.filter((entry) => matchesShortStoryBook(entry.book))
-    : strictUrbanPoverty
-      ? (() => {
-        const strict = deduped.filter((entry) => matchesUrbanPovertyBook(entry.book));
-        if (strict.length >= 3) return strict;
-
-        const topUp = deduped.filter((entry) => matchesUrbanSupportBook(entry.book));
-        const merged = [];
-        const seen = new Set();
-        [...strict, ...topUp].forEach((entry) => {
-          const key = `${normalizeText(entry.book.title)}::${normalizeText(entry.book.category)}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            merged.push(entry);
-          }
-        });
-        return merged;
-      })()
-      : strictEconomics
-      ? deduped.filter((entry) => matchesEconomicsBook(entry.book))
-      : deduped;
-
-  const finalEntries = filtered.length ? filtered : deduped;
-  const capped = finalEntries.slice(0, Number(limit) > 0 ? Math.min(Number(limit), 50) : 20);
   const rankedBooks = capped.map((entry) => entry.book);
 
   const topicBuckets = {};
@@ -369,7 +285,10 @@ router.get("/semantic", authRequired, async (req, res) => {
 
   return res.json({
     topic: q,
-    books: rankedBooks.map(serializeBook),
+    books: capped.map((entry) => ({
+      ...serializeBook(entry.book),
+      relevance: buildBookRelevance(entry.book, q, expandedTerms, entry.score),
+    })),
     relatedThemes: relatedForUi,
     meta: {
       totalCandidates: books.length,
