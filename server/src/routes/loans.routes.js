@@ -7,8 +7,9 @@ import Alert from "../models/Alert.js";
 import Subscription from "../models/Subscription.js";
 import { authRequired } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
-import { getLoanDaysByDemand } from "../utils/loanPolicy.js";
+import { getLoanPolicyByDemand } from "../utils/loanPolicy.js";
 import { calculateReturnFineOutcome } from "../utils/loanFineProcessing.js";
+import { resolveDueDate, resolveLoanPolicy, synchronizeApprovedLoanSchedule } from "../utils/loanSchedule.js";
 import {
   getBorrowDemandDelta,
   getBookDemandScore,
@@ -19,9 +20,10 @@ import {
 } from "../utils/bookRecord.js";
 
 const router = express.Router();
+const LOAN_MANAGER_ROLES = ["librarian", "staff", "admin"];
 
 function canManageOtherUsers(role) {
-  return ["librarian", "staff", "admin"].includes(role);
+  return LOAN_MANAGER_ROLES.includes(role);
 }
 
 function isLoanPending(loan) {
@@ -42,16 +44,25 @@ function isLoanApproved(loan) {
 
 function serializeLoan(loan) {
   const plain = typeof loan.toObject === "function" ? loan.toObject({ virtuals: true }) : { ...loan };
+  const resolvedDueDate = plain.dueDate || resolveDueDate(plain, plain.book);
+  const policy = resolveLoanPolicy(plain, plain.book);
   const derivedStatus = plain.status
-    || (plain.returnedAt ? "returned" : plain.dueDate || plain.borrowDate ? "approved" : "pending");
+    || (plain.returnedAt ? "returned" : resolvedDueDate || plain.borrowDate ? "approved" : "pending");
 
   return {
     ...plain,
     status: derivedStatus,
     requestDate: plain.requestDate || plain.createdAt || plain.borrowDate || null,
+    borrowDate: plain.borrowDate || plain.approvedAt || plain.requestDate || plain.createdAt || null,
+    dueDate: resolvedDueDate || null,
     renewalRequestStatus: plain.renewalRequestStatus || "none",
     returnRequestStatus: plain.returnRequestStatus || "none",
     returnRejectionReason: plain.returnRejectionReason || "",
+    borrowPolicyDays: policy.loanDays,
+    maxRenewals: policy.maxRenewals,
+    overdueDailyRate: policy.overdueDailyRate,
+    policyTier: policy.tier,
+    policy,
     book: serializeBook(plain.book),
   };
 }
