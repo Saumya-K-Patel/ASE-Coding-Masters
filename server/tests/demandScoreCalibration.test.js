@@ -6,6 +6,7 @@ import {
   increaseBookDemandScore,
 } from "../src/utils/bookRecord.js";
 import { calculateDemandForecastForBook } from "../src/utils/demandForecast.js";
+import { getLoanPolicyByDemand } from "../src/utils/loanPolicy.js";
 
 test("legacy or missing demand scores are calibrated to a small default range", () => {
   const lowDemandBook = {
@@ -60,6 +61,32 @@ test("borrowing applies a stronger bump when the checkout pushes a book into low
   assert.equal(getBorrowDemandDelta(lowStockBook, 1), 4);
 });
 
+test("demand policy tightens loan days and renewals as demand climbs", () => {
+  const standard = getLoanPolicyByDemand(22);
+  const elevated = getLoanPolicyByDemand(48);
+  const critical = getLoanPolicyByDemand(92);
+
+  assert.deepEqual(
+    {
+      tier: standard.tier,
+      loanDays: standard.loanDays,
+      maxRenewals: standard.maxRenewals,
+      overdueDailyRate: standard.overdueDailyRate,
+    },
+    {
+      tier: "standard",
+      loanDays: 14,
+      maxRenewals: 2,
+      overdueDailyRate: 2.5,
+    }
+  );
+  assert.equal(elevated.loanDays, 10);
+  assert.equal(elevated.maxRenewals, 1);
+  assert.equal(critical.loanDays, 5);
+  assert.equal(critical.maxRenewals, 0);
+  assert.equal(critical.overdueDailyRate, 6);
+});
+
 test("forecast adds a modest circulation boost for an active borrowed copy", () => {
   const book = {
     _id: "book-1",
@@ -107,4 +134,23 @@ test("forecast highlights low stock directly in the predictor output", () => {
   assert.equal(forecast.recommendation, "Increase copies soon");
   assert.equal(forecast.signals.stockLevelLabel, "1 copy left");
   assert.ok(forecast.signalSummary.includes("1 copy left"));
+});
+
+test("forecast exposes borrow-relative demand bar details", () => {
+  const book = {
+    _id: "book-3",
+    title: "Borrow Ratio Guide",
+    category: "Management",
+    examSeasonImpact: "Medium",
+    totalCopies: 5,
+    stock: 2,
+    demandScore: 18,
+    demandVersion: 2,
+  };
+
+  const forecast = calculateDemandForecastForBook(book, [], [], new Date("2026-04-14T00:00:00.000Z"));
+
+  assert.equal(forecast.borrowedCopies, 3);
+  assert.equal(forecast.borrowedRatio, 0.6);
+  assert.equal(forecast.demandBarPercent, 60);
 });
