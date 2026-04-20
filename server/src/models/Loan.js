@@ -39,6 +39,8 @@ const loanSchema = new mongoose.Schema(
     renewalCount: { type: Number, default: 0 },
     maxRenewals: { type: Number, default: 2 },
     borrowPolicyDays: { type: Number, default: 14 },
+    policyTier: { type: String, default: "standard" },
+    overdueDailyRate: { type: Number, default: 2.5 },
   },
   { timestamps: true }
 );
