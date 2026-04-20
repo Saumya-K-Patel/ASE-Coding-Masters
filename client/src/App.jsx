@@ -33,10 +33,18 @@ function fmtLongDate(value) {
   }).format(new Date(value));
 }
 
-function daysLeft(value) {
-  const due = new Date(value);
-  const now = new Date();
-  return Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+function startOfDay(value) {
+  const parsed = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+}
+
+function daysLeft(value, now = new Date()) {
+  const due = startOfDay(value);
+  const today = startOfDay(now);
+  if (!due || !today) return 0;
+  return Math.round((due - today) / (1000 * 60 * 60 * 24));
 }
 
 function timeAgo(value) {
@@ -51,10 +59,116 @@ function timeAgo(value) {
   return `${Math.floor(diffDays / 7)} weeks ago`;
 }
 
+function flattenTextParts(value, depth = 0) {
+  if (depth > 5 || value == null) return [];
+  if (typeof value === "string") return [value];
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenTextParts(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const preferredKeys = ["text", "content", "message", "response", "summary", "title", "label"];
+    const nested = preferredKeys.flatMap((key) => (
+      Object.prototype.hasOwnProperty.call(value, key)
+        ? flattenTextParts(value[key], depth + 1)
+        : []
+    ));
+
+    if (nested.length) return nested;
+
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized && serialized !== "{}" ? [serialized] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function asDisplayText(value, fallback = "") {
+  const text = flattenTextParts(value)
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return text || fallback;
+}
+
 function toneByDemand(score) {
   if (score > 40) return "danger";
   if (score > 24) return "warn";
   return "ok";
+}
+
+function clampPercent(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function getBorrowedCopies(item) {
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  const stock = Math.max(0, Number(item?.stock) || 0);
+  const explicitBorrowed = Number(item?.borrowedCopies);
+
+  if (Number.isFinite(explicitBorrowed) && explicitBorrowed >= 0) {
+    return Math.min(totalCopies, Math.round(explicitBorrowed));
+  }
+
+  return Math.max(0, totalCopies - stock);
+}
+
+function getBorrowPressurePercent(item) {
+  const explicitPercent = Number(item?.demandBarPercent);
+  if (Number.isFinite(explicitPercent)) return clampPercent(explicitPercent);
+
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  if (totalCopies <= 0) return 0;
+  return clampPercent((getBorrowedCopies(item) / totalCopies) * 100);
+}
+
+function toneByBorrowPressure(percent) {
+  if (percent >= 80) return "danger";
+  if (percent >= 45) return "warn";
+  return "ok";
+}
+
+function formatBorrowPressure(item) {
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  return `${getBorrowedCopies(item)}/${totalCopies || 0} borrowed`;
+}
+
+function formatRenewalPolicy(maxRenewals) {
+  const renewals = Number(maxRenewals);
+  if (!Number.isFinite(renewals) || renewals <= 0) return "No renewals";
+  return `${renewals} renewal${renewals === 1 ? "" : "s"}`;
+}
+
+function getLoanPolicyView(loan) {
+  const policy = loan?.policy || loan || {};
+  const loanDays = Number(policy.loanDays ?? policy.borrowPolicyDays);
+  const maxRenewals = Number(policy.maxRenewals);
+  const overdueDailyRate = Number(policy.overdueDailyRate);
+  const policyTier = String(policy.tier || policy.policyTier || "").trim();
+
+  const pieces = [];
+  if (Number.isFinite(loanDays) && loanDays > 0) {
+    pieces.push(`${loanDays} day loan`);
+  }
+  pieces.push(formatRenewalPolicy(maxRenewals));
+  if (Number.isFinite(overdueDailyRate) && overdueDailyRate > 0) {
+    pieces.push(`$${overdueDailyRate.toFixed(2)}/day overdue`);
+  }
+
+  return {
+    label: pieces.filter(Boolean).join(" • "),
+    tier: policyTier,
+  };
 }
 
 function keyActivatesCard(e) {
@@ -305,12 +419,24 @@ function hasPendingRenewal(loan) {
   return loan?.renewalRequestStatus === "pending";
 }
 
+function hasRejectedRenewal(loan) {
+  return loan?.renewalRequestStatus === "rejected";
+}
+
 function hasPendingReturn(loan) {
   return loan?.returnRequestStatus === "pending";
 }
 
 function hasRejectedReturn(loan) {
   return loan?.returnRequestStatus === "rejected";
+}
+
+function canRequestRenewal(loan) {
+  const maxRenewals = Number(loan?.policy?.maxRenewals ?? loan?.maxRenewals);
+  const renewalCount = Number(loan?.renewalCount);
+  if (!Number.isFinite(maxRenewals) || maxRenewals <= 0) return false;
+  if (!Number.isFinite(renewalCount)) return true;
+  return renewalCount < maxRenewals;
 }
 
 const adminTabs = [
@@ -337,6 +463,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authForm, setAuthForm] = useState({ email: "admin@uni.edu", password: "password123" });
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [timeMarker, setTimeMarker] = useState(() => Date.now());
 
   const [books, setBooks] = useState([]);
   const [loans, setLoans] = useState([]);
@@ -391,6 +518,11 @@ export default function App() {
     const timeout = setTimeout(() => setMessage(""), 2400);
     return () => clearTimeout(timeout);
   }, [message]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTimeMarker(Date.now()), 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     setAuthToken(token);
@@ -563,7 +695,7 @@ export default function App() {
     await withAction(async () => {
       await api.post(`/loans/${id}/renew`);
       await loadSession();
-      await loadLoans();
+      await refreshAll();
     }, "Renewal request submitted");
   }
 
@@ -855,25 +987,27 @@ export default function App() {
   }
 
   const isAdmin = adminRoles.includes(user?.role);
-  const isApprovalAdmin = user?.role === "admin";
+  const isApprovalAdmin = adminRoles.includes(user?.role);
   const tabs = isAdmin ? adminTabs : studentTabs;
 
   const activeLoans = useMemo(() => loans.filter(isActiveLoan), [loans]);
   const pendingReservations = useMemo(() => loans.filter(isPendingLoan), [loans]);
+  const rejectedReservations = useMemo(() => loans.filter((loan) => loan.status === "rejected"), [loans]);
   const dueSoonLoans = useMemo(
     () => activeLoans.filter((loan) => daysLeft(loan.dueDate) >= 0 && daysLeft(loan.dueDate) <= 3),
-    [activeLoans]
+    [activeLoans, timeMarker]
   );
+  const pendingFines = useMemo(() => fines.filter((fine) => fine.status === "pending"), [fines]);
   const outstandingFine = useMemo(
-    () => fines.filter((fine) => fine.status === "pending").reduce((sum, fine) => sum + fine.amount, 0),
-    [fines]
+    () => pendingFines.reduce((sum, fine) => sum + fine.amount, 0),
+    [pendingFines]
   );
-  const pendingFineCount = useMemo(() => fines.filter((fine) => fine.status === "pending").length, [fines]);
+  const pendingFineCount = useMemo(() => pendingFines.length, [pendingFines]);
   const paidFineCount = useMemo(() => fines.filter((fine) => fine.status === "paid").length, [fines]);
   const lowStockCount = useMemo(() => books.filter((book) => book.stock <= 2).length, [books]);
   const outOfStockCount = useMemo(() => books.filter((book) => book.stock === 0).length, [books]);
   const highDemandCount = useMemo(() => demand.filter((item) => item.demandScore >= 40).length, [demand]);
-  const overdues = useMemo(() => activeLoans.filter((loan) => daysLeft(loan.dueDate) < 0).length, [activeLoans]);
+  const overdues = useMemo(() => activeLoans.filter((loan) => daysLeft(loan.dueDate) < 0).length, [activeLoans, timeMarker]);
   const unreadAlertsCount = useMemo(() => alerts.filter((a) => !a.read).length, [alerts]);
   const readAlertsCount = useMemo(() => alerts.filter((a) => a.read).length, [alerts]);
   const availabilityRate = useMemo(
@@ -914,7 +1048,7 @@ export default function App() {
       }
       return true;
     }),
-    [activeLoans, borrowersFilter]
+    [activeLoans, borrowersFilter, timeMarker]
   );
   const reservationRows = useMemo(
     () => pendingReservations.filter((loan) => {
@@ -944,14 +1078,14 @@ export default function App() {
     () => [...demand].sort((a, b) => b.demandScore - a.demandScore).slice(0, 4),
     [demand]
   );
-  const studentDateLabel = useMemo(() => fmtLongDate(new Date()), []);
+  const studentDateLabel = useMemo(() => fmtLongDate(timeMarker), [timeMarker]);
   const researchDueSoonCount = useMemo(
     () => research.filter((project) => {
       if (!project?.targetCompletionDate || project.status === "completed") return false;
       const daysUntilDue = daysLeft(project.targetCompletionDate);
       return daysUntilDue >= 0 && daysUntilDue <= 7;
     }).length,
-    [research]
+    [research, timeMarker]
   );
   const recentActivity = useMemo(() => {
     const items = [];
@@ -976,7 +1110,9 @@ export default function App() {
         key: `due-${dueSoon._id}`,
         icon: "⚠️",
         title: `\"${dueSoon.book.title}\" due in ${daysLeft(dueSoon.dueDate)} day${daysLeft(dueSoon.dueDate) === 1 ? "" : "s"}`,
-        action: { label: "Request Renewal", onClick: () => renewLoan(dueSoon._id) },
+        action: canRequestRenewal(dueSoon)
+          ? { label: "Request Renewal", onClick: () => renewLoan(dueSoon._id) }
+          : undefined,
       });
     }
 
@@ -993,7 +1129,7 @@ export default function App() {
     }
 
     return items.slice(0, 3);
-  }, [activeLoans, loans]);
+  }, [activeLoans, loans, timeMarker]);
 
   const latestAiRuntime = useMemo(
     () => [...aiMessages].reverse().find((entry) => entry.role === "ai" && (entry.model || entry.provider || entry.warning)) || null,
@@ -1009,7 +1145,7 @@ export default function App() {
         "Suggest a simple literature review workflow using the library catalog.",
       ];
 
-    return uniqueItems(dynamic).slice(0, 4);
+    return uniqueList(dynamic).slice(0, 4);
   }, [latestAiRuntime, query, research]);
 
   const arFloors = {
@@ -1392,7 +1528,7 @@ export default function App() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Cover</th><th>Title</th><th>Author</th><th>Category</th><th>Stock</th><th>Demand</th><th>Actions</th></tr>
+                  <tr><th>Cover</th><th>Title</th><th>Author</th><th>Category</th><th>Stock</th><th>Borrow Pressure</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {inventoryRows.map((book) => (
@@ -1403,11 +1539,17 @@ export default function App() {
                       <td>{book.category}</td>
                       <td>{book.stock}/{book.totalCopies}</td>
                       <td>
-                        <div className="demand-cell">
-                          <div className="demand-track">
-                            <span className={`demand-fill ${toneByDemand(book.demandScore)}`} style={{ width: `${book.demandScore}%` }} />
+                        <div className="stack compact">
+                          <div className="demand-cell">
+                            <div className="demand-track">
+                              <span
+                                className={`demand-fill ${toneByBorrowPressure(getBorrowPressurePercent(book))}`}
+                                style={{ width: `${getBorrowPressurePercent(book)}%` }}
+                              />
+                            </div>
+                            <span className={`pill ${toneByBorrowPressure(getBorrowPressurePercent(book))}`}>{getBorrowPressurePercent(book)}%</span>
                           </div>
-                          <span className={`pill ${toneByDemand(book.demandScore)}`}>{book.demandScore}</span>
+                          <span className="muted">{formatBorrowPressure(book)} • score {book.demandScore}</span>
                         </div>
                       </td>
                       <td><button onClick={() => deleteBook(book._id)}>Delete</button></td>
@@ -1432,7 +1574,7 @@ export default function App() {
             <p className="muted">Students place reservations first. Renewals and returns are also processed only after admin review.</p>
 
             <h3>Pending Reservations</h3>
-            {!isApprovalAdmin ? <p className="muted">Only users with the `admin` role can approve or reject reservations.</p> : null}
+            {!isApprovalAdmin ? <p className="muted">Only library staff with loan-management access can approve or reject reservations.</p> : null}
             <table>
               <thead>
                 <tr><th>User</th><th>Book</th><th>Requested</th><th>Status</th><th>Actions</th></tr>
@@ -1467,7 +1609,7 @@ export default function App() {
             <h3>Approved Active Loans</h3>
             <table>
               <thead>
-                <tr><th>User</th><th>Book</th><th>Borrowed</th><th>Due</th><th>Status</th><th>Requests</th><th>Renewals</th><th>Actions</th></tr>
+                <tr><th>User</th><th>Book</th><th>Borrowed</th><th>Due</th><th>Status</th><th>Policy</th><th>Requests</th><th>Renewals</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {borrowerRows.map((loan) => (
@@ -1478,6 +1620,12 @@ export default function App() {
                     <td>{fmtDate(loan.dueDate)}</td>
                     <td>
                       {daysLeft(loan.dueDate) < 0 ? <span className="pill danger">Overdue</span> : <span className="pill ok">Active</span>}
+                    </td>
+                    <td>
+                      <div className="stack compact">
+                        <span>{getLoanPolicyView(loan).label}</span>
+                        {getLoanPolicyView(loan).tier ? <span className="muted">{formatWorkflowLabel(getLoanPolicyView(loan).tier)} policy</span> : null}
+                      </div>
                     </td>
                     <td>
                       {hasPendingRenewal(loan) ? <span className="pill warn">Renewal Request</span> : null}
@@ -1506,7 +1654,7 @@ export default function App() {
                 ))}
                 {!borrowerRows.length ? (
                   <tr>
-                    <td colSpan="8" className="muted">No active approved loans for this filter.</td>
+                    <td colSpan="9" className="muted">No active approved loans for this filter.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -1556,18 +1704,24 @@ export default function App() {
             <h2>Demand Predictor</h2>
             <table>
               <thead>
-                <tr><th>Book</th><th>Demand Score</th><th>Exam Impact</th><th>Stock</th><th>Recommendation</th><th>Signals</th></tr>
+                <tr><th>Book</th><th>Borrow Pressure</th><th>Exam Impact</th><th>Stock</th><th>Recommendation</th><th>Signals</th></tr>
               </thead>
               <tbody>
                 {demand.map((item) => (
                   <tr key={item.bookId}>
                     <td>{item.title}</td>
                     <td>
-                      <div className="demand-cell">
-                        <div className="demand-track">
-                          <span className={`demand-fill ${toneByDemand(item.demandScore)}`} style={{ width: `${item.demandScore}%` }} />
+                      <div className="stack compact">
+                        <div className="demand-cell">
+                          <div className="demand-track">
+                            <span
+                              className={`demand-fill ${toneByBorrowPressure(getBorrowPressurePercent(item))}`}
+                              style={{ width: `${getBorrowPressurePercent(item)}%` }}
+                            />
+                          </div>
+                          <span className={`pill ${toneByBorrowPressure(getBorrowPressurePercent(item))}`}>{getBorrowPressurePercent(item)}%</span>
                         </div>
-                        <span className={`pill ${toneByDemand(item.demandScore)}`}>{item.demandScore}</span>
+                        <span className="muted">{formatBorrowPressure(item)} • score {item.demandScore}</span>
                       </div>
                     </td>
                     <td>{item.examSeasonImpact}</td>
@@ -1681,9 +1835,9 @@ export default function App() {
               </article>
               <article className="card student-stat-card tone-amber" onClick={() => setActiveTab("account")} role="button" tabIndex={0}>
                 <div className="student-stat-head"><span className="student-stat-icon">💰</span><h3>Outstanding Fines</h3></div>
-                <strong>${Number(user.finesOutstanding || 0).toFixed(2)}</strong>
-                <p>{Number(user.finesOutstanding || 0) > 0 ? `${fines.filter((fine) => fine.status === "pending").length} pending item(s)` : "You're clear ✅"}</p>
-                <small>{Number(user.finesOutstanding || 0) > 0 ? "Review account status" : "No payment action needed"}</small>
+                <strong>${outstandingFine.toFixed(2)}</strong>
+                <p>{outstandingFine > 0 ? `${pendingFineCount} pending item(s)` : "You're clear ✅"}</p>
+                <small>{outstandingFine > 0 ? "Review account status" : "No payment action needed"}</small>
               </article>
               <article className="card student-stat-card tone-rose" onClick={() => setActiveTab("loans")} role="button" tabIndex={0}>
                 <div className="student-stat-head"><span className="student-stat-icon">🔔</span><h3>Stock Alerts</h3></div>
@@ -1794,6 +1948,14 @@ export default function App() {
                             const insight = buildBookInsight({ topic: query || book.title, keywords: semantic?.relatedThemes || [] }, book, books);
                             return (
                               <div className="book-insight-copy">
+                                {book.relevance?.summary ? <p><strong>Why it matches your query:</strong> {asDisplayText(book.relevance.summary)}</p> : null}
+                                {Array.isArray(book.relevance?.matchedTerms) && book.relevance.matchedTerms.length ? (
+                                  <div className="row wrap">
+                                    {book.relevance.matchedTerms.map((term) => (
+                                      <span key={`${book._id}-match-${asDisplayText(term, "match")}`} className="pill warn">{asDisplayText(term)}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
                                 <p>{insight.offerSummary}</p>
                                 <p>{insight.differenceSummary}</p>
                                 <div className="stack compact">
@@ -1831,7 +1993,7 @@ export default function App() {
           <section className="panel table-wrap">
             <h2>My Loans and Reservations</h2>
 
-            <h3>Pending Reservations</h3>
+            <h3>Reservation Requests</h3>
             {pendingReservations.length ? (
               <table>
                 <thead>
@@ -1850,10 +2012,29 @@ export default function App() {
               </table>
             ) : <p className="muted">No pending reservations right now.</p>}
 
+            <h3>Rejected Reservations</h3>
+            {rejectedReservations.length ? (
+              <table>
+                <thead>
+                  <tr><th>Book</th><th>Requested</th><th>Decision</th><th>Reason</th></tr>
+                </thead>
+                <tbody>
+                  {rejectedReservations.map((loan) => (
+                    <tr key={loan._id}>
+                      <td>{loan.book?.title}</td>
+                      <td>{fmtDate(loan.requestDate || loan.createdAt)}</td>
+                      <td><span className="pill danger">Rejected</span></td>
+                      <td>{loan.rejectionReason || "Reservation was not approved."}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p className="muted">No rejected reservations.</p>}
+
             <h3>Approved Loans</h3>
             <table>
               <thead>
-                <tr><th>Book</th><th>Due Date</th><th>Days Left</th><th>Requests</th><th>Actions</th></tr>
+                <tr><th>Book</th><th>Due Date</th><th>Days Left</th><th>Policy</th><th>Requests</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {activeLoans.map((loan) => (
@@ -1862,21 +2043,34 @@ export default function App() {
                     <td>{fmtDate(loan.dueDate)}</td>
                     <td><span className={`pill ${daysLeft(loan.dueDate) < 0 ? "danger" : "ok"}`}>{daysLeft(loan.dueDate)}</span></td>
                     <td>
+                      <div className="stack compact">
+                        <span>{getLoanPolicyView(loan).label}</span>
+                        {getLoanPolicyView(loan).tier ? <span className="muted">{formatWorkflowLabel(getLoanPolicyView(loan).tier)} policy</span> : null}
+                      </div>
+                    </td>
+                    <td>
                       {hasPendingRenewal(loan) ? <span className="pill warn">Renewal Pending</span> : null}
-                      {!hasPendingRenewal(loan) && hasPendingReturn(loan) ? <span className="pill warn">Return Pending</span> : null}
-                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && hasRejectedReturn(loan) ? <span className="pill danger">Return Rejected</span> : null}
-                      {!hasPendingRenewal(loan) && !hasPendingReturn(loan) && !hasRejectedReturn(loan) ? <span className="muted">No open requests</span> : null}
+                      {!hasPendingRenewal(loan) && hasRejectedRenewal(loan) ? <span className="pill danger">Renewal Rejected</span> : null}
+                      {!hasPendingRenewal(loan) && !hasRejectedRenewal(loan) && hasPendingReturn(loan) ? <span className="pill warn">Return Pending</span> : null}
+                      {!hasPendingRenewal(loan) && !hasRejectedRenewal(loan) && !hasPendingReturn(loan) && hasRejectedReturn(loan) ? <span className="pill danger">Return Rejected</span> : null}
+                      {!hasPendingRenewal(loan) && !hasRejectedRenewal(loan) && !hasPendingReturn(loan) && !hasRejectedReturn(loan) ? <span className="muted">No open requests</span> : null}
+                      {hasRejectedRenewal(loan) && loan.renewalRejectionReason ? <div className="muted">Reason: {loan.renewalRejectionReason}</div> : null}
                       {hasRejectedReturn(loan) && loan.returnRejectionReason ? <div className="muted">Reason: {loan.returnRejectionReason}</div> : null}
                     </td>
                     <td className="row">
-                      <button disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)} onClick={() => renewLoan(loan._id)}>Request Renewal</button>
+                      <button
+                        disabled={!canRequestRenewal(loan) || hasPendingRenewal(loan) || hasPendingReturn(loan)}
+                        onClick={() => renewLoan(loan._id)}
+                      >
+                        Request Renewal
+                      </button>
                       <button disabled={hasPendingRenewal(loan) || hasPendingReturn(loan)} onClick={() => returnLoan(loan._id)}>Request Return</button>
                     </td>
                   </tr>
                 ))}
                 {!activeLoans.length ? (
                   <tr>
-                    <td colSpan="5" className="muted">No approved loans yet. Your reservations will appear here after admin approval.</td>
+                    <td colSpan="6" className="muted">No approved loans yet. Your reservations will appear here after admin approval.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -2176,8 +2370,26 @@ export default function App() {
               <div className="line-item"><span>Email</span><strong>{user.email}</strong></div>
               <div className="line-item"><span>Role</span><strong>{user.role}</strong></div>
               <div className="line-item"><span>Department</span><strong>{user.department}</strong></div>
-              <div className="line-item"><span>Outstanding fines</span><strong>${Number(user.finesOutstanding || 0).toFixed(2)}</strong></div>
+              <div className="line-item"><span>Total amount due</span><strong>${outstandingFine.toFixed(2)}</strong></div>
+              <div className="line-item"><span>Pending fine items</span><strong>{pendingFineCount}</strong></div>
+              <div className="line-item"><span>Account status</span><strong>{outstandingFine > 0 ? "Payment required" : "Clear"}</strong></div>
             </div>
+            {pendingFines.length ? (
+              <div className="stack" style={{ marginTop: 12 }}>
+                <h3>Pending Charges</h3>
+                {pendingFines.map((fine) => (
+                  <article key={fine._id} className="result-row">
+                    <div>
+                      <strong>{fine.reason}</strong>
+                      <p>{fmtDate(fine.createdAt)}</p>
+                    </div>
+                    <strong>${Number(fine.amount || 0).toFixed(2)}</strong>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted" style={{ marginTop: 12 }}>No amount is currently due on your account.</p>
+            )}
           </section>
         ) : null}
       </main>
@@ -2201,8 +2413,8 @@ export default function App() {
               </div>
               <div className="chat-box">
                 {aiMessages.map((m, idx) => (
-                  <div key={`${m.role}-${idx}`} className={`bubble ${m.role === "user" ? "mine" : "theirs"}`}>
-                    {!shouldHideAiReplyText(m) ? <div className="bubble-text">{m.text}</div> : null}
+                    <div key={`${m.role}-${idx}`} className={`bubble ${m.role === "user" ? "mine" : "theirs"}`}>
+                      {!shouldHideAiReplyText(m) ? <div className="bubble-text">{asDisplayText(m.text)}</div> : null}
                     {m.role === "ai" && (m.provider || m.model) ? (
                       <div className="ai-context-meta">
                         {formatAiProvider(m.provider) || "Assistant"}
@@ -2219,10 +2431,18 @@ export default function App() {
                       <div className="ai-source-list">
                         {m.sources.map((source) => (
                           <div className="ai-source-chip" key={`${source.bookId}-${source.title}`}>
-                            <strong>{source.title}</strong>
+                            <strong>{asDisplayText(source.title, "Untitled source")}</strong>
                             <span>
                               Floor {source.location?.floor ?? "?"} • Shelf {source.location?.shelf ?? "?"} • Stock {source.stock}/{source.totalCopies}
                             </span>
+                            {source.whyRelevant ? <p>{asDisplayText(source.whyRelevant)}</p> : null}
+                            {Array.isArray(source.matchedTerms) && source.matchedTerms.length ? (
+                              <div className="row wrap">
+                                {source.matchedTerms.map((term) => (
+                                  <span key={`${source.bookId}-${asDisplayText(term, "match")}`} className="pill warn">{asDisplayText(term)}</span>
+                                ))}
+                              </div>
+                            ) : null}
                             <div className="ai-source-actions">
                               <button className="subtle" onClick={() => jumpToARFromSource(source)}>Locate in AR</button>
                               <button className="subtle" onClick={() => searchFromSource(source)}>Find Similar</button>

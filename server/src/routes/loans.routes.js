@@ -7,8 +7,9 @@ import Alert from "../models/Alert.js";
 import Subscription from "../models/Subscription.js";
 import { authRequired } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
-import { getLoanDaysByDemand } from "../utils/loanPolicy.js";
+import { getLoanPolicyByDemand } from "../utils/loanPolicy.js";
 import { calculateReturnFineOutcome } from "../utils/loanFineProcessing.js";
+import { resolveDueDate, resolveLoanPolicy, synchronizeApprovedLoanSchedule } from "../utils/loanSchedule.js";
 import {
   getBorrowDemandDelta,
   getBookDemandScore,
@@ -19,9 +20,10 @@ import {
 } from "../utils/bookRecord.js";
 
 const router = express.Router();
+const LOAN_MANAGER_ROLES = ["librarian", "staff", "admin"];
 
 function canManageOtherUsers(role) {
-  return ["librarian", "staff", "admin"].includes(role);
+  return LOAN_MANAGER_ROLES.includes(role);
 }
 
 function isLoanPending(loan) {
@@ -42,16 +44,25 @@ function isLoanApproved(loan) {
 
 function serializeLoan(loan) {
   const plain = typeof loan.toObject === "function" ? loan.toObject({ virtuals: true }) : { ...loan };
+  const resolvedDueDate = plain.dueDate || resolveDueDate(plain, plain.book);
+  const policy = resolveLoanPolicy(plain, plain.book);
   const derivedStatus = plain.status
-    || (plain.returnedAt ? "returned" : plain.dueDate || plain.borrowDate ? "approved" : "pending");
+    || (plain.returnedAt ? "returned" : resolvedDueDate || plain.borrowDate ? "approved" : "pending");
 
   return {
     ...plain,
     status: derivedStatus,
     requestDate: plain.requestDate || plain.createdAt || plain.borrowDate || null,
+    borrowDate: plain.borrowDate || plain.approvedAt || plain.requestDate || plain.createdAt || null,
+    dueDate: resolvedDueDate || null,
     renewalRequestStatus: plain.renewalRequestStatus || "none",
     returnRequestStatus: plain.returnRequestStatus || "none",
     returnRejectionReason: plain.returnRejectionReason || "",
+    borrowPolicyDays: policy.loanDays,
+    maxRenewals: policy.maxRenewals,
+    overdueDailyRate: policy.overdueDailyRate,
+    policyTier: policy.tier,
+    policy,
     book: serializeBook(plain.book),
   };
 }
@@ -78,7 +89,12 @@ async function persistBookAvailability(book, nextStock) {
 }
 
 async function findLoanForUser(id) {
-  return Loan.findById(id).populate("book").populate("user");
+  const loan = await Loan.findById(id).populate("book").populate("user");
+  if (!loan || !isLoanApproved(loan)) return loan;
+
+  const { changed } = synchronizeApprovedLoanSchedule(loan, loan.book);
+  if (changed) await loan.save();
+  return loan;
 }
 
 function buildUnresolvedLoanQuery(userId, bookId) {
@@ -107,6 +123,13 @@ router.get("/", authRequired, async (req, res) => {
     .populate("book")
     .populate("user", "name email role finesOutstanding isBlocked")
     .sort({ createdAt: -1 });
+
+  await Promise.all(loans.map(async (loan) => {
+    if (!isLoanApproved(loan)) return;
+    const { changed } = synchronizeApprovedLoanSchedule(loan, loan.book);
+    if (changed) await loan.save();
+  }));
+
   return res.json(loans.map(serializeLoan));
 });
 
@@ -130,6 +153,7 @@ async function createReservation(req, res) {
       return res.status(400).json({ message: "You already have a pending or active request for this book." });
     }
 
+    const policy = getLoanPolicyByDemand(getBookDemandScore(book));
     const reservation = await Loan.create({
       user: req.user._id,
       book: bookId,
@@ -137,8 +161,10 @@ async function createReservation(req, res) {
       requestDate: new Date(),
       borrowDate: null,
       dueDate: null,
-      maxRenewals: Number(book.borrowPolicy?.maxRenewals) || 2,
-      borrowPolicyDays: getLoanDaysByDemand(getBookDemandScore(book)),
+      maxRenewals: policy.maxRenewals,
+      borrowPolicyDays: policy.loanDays,
+      overdueDailyRate: policy.overdueDailyRate,
+      policyTier: policy.tier,
     });
 
     await Alert.create([
@@ -167,7 +193,7 @@ async function createReservation(req, res) {
 router.post("/reserve", authRequired, createReservation);
 router.post("/borrow", authRequired, createReservation);
 
-router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res) => {
+router.post("/:id/approve", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   try {
     const loan = await findLoanForUser(req.params.id);
     if (!loan) return res.status(404).json({ message: "Reservation not found" });
@@ -182,7 +208,8 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
       return res.status(400).json({ message: "Cannot approve because the book is currently out of stock." });
     }
 
-    const loanDays = getLoanDaysByDemand(getBookDemandScore(loan.book));
+    const policy = getLoanPolicyByDemand(getBookDemandScore(loan.book));
+    const loanDays = policy.loanDays;
     const borrowDate = new Date();
     const dueDate = new Date(borrowDate.getTime() + loanDays * 24 * 60 * 60 * 1000);
 
@@ -195,7 +222,9 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
     loan.reservationDecisionBy = req.user._id;
     loan.rejectionReason = "";
     loan.borrowPolicyDays = loanDays;
-    loan.maxRenewals = Number(loan.book?.borrowPolicy?.maxRenewals) || loan.maxRenewals || 2;
+    loan.maxRenewals = policy.maxRenewals;
+    loan.overdueDailyRate = policy.overdueDailyRate;
+    loan.policyTier = policy.tier;
     await loan.save();
 
     const nextStock = stock - 1;
@@ -218,7 +247,7 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
   }
 });
 
-router.post("/:id/reject", authRequired, requireRole("admin"), async (req, res) => {
+router.post("/:id/reject", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   try {
     const loan = await findLoanForUser(req.params.id);
     if (!loan) return res.status(404).json({ message: "Reservation not found" });
@@ -257,7 +286,10 @@ router.post("/:id/renew", authRequired, async (req, res) => {
     if (!ownLoan && !elevated) return res.status(403).json({ message: "Forbidden" });
 
     if (!isLoanApproved(loan)) return res.status(400).json({ message: "Only approved active loans can be renewed." });
-    if (loan.renewalCount >= loan.maxRenewals) return res.status(400).json({ message: "Maximum renewals reached" });
+    const loanPolicy = resolveLoanPolicy(loan, loan.book);
+    if (loan.renewalCount >= loanPolicy.maxRenewals) {
+      return res.status(400).json({ message: "Maximum renewals reached for this demand level" });
+    }
     if (loan.user.isBlocked || loan.user.finesOutstanding > 0) {
       return res.status(400).json({ message: "Cannot renew while fines are outstanding or account is blocked." });
     }
@@ -298,7 +330,7 @@ router.post("/:id/renew", authRequired, async (req, res) => {
   }
 });
 
-router.post("/:id/renew/approve", authRequired, requireRole("admin"), async (req, res) => {
+router.post("/:id/renew/approve", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   try {
     const loan = await findLoanForUser(req.params.id);
     if (!loan) return res.status(404).json({ message: "Loan not found" });
@@ -307,9 +339,18 @@ router.post("/:id/renew/approve", authRequired, requireRole("admin"), async (req
       return res.status(400).json({ message: "There is no pending renewal request for this loan." });
     }
 
-    const extensionDays = Math.max(7, getLoanDaysByDemand(getBookDemandScore(loan.book)));
+    const renewalPolicy = getLoanPolicyByDemand(getBookDemandScore(loan.book));
+    if (loan.renewalCount >= renewalPolicy.maxRenewals) {
+      return res.status(400).json({ message: "Demand for this book no longer allows another renewal." });
+    }
+
+    const extensionDays = renewalPolicy.loanDays;
     loan.renewalCount += 1;
     loan.dueDate = new Date(new Date(loan.dueDate).getTime() + extensionDays * 24 * 60 * 60 * 1000);
+    loan.borrowPolicyDays = renewalPolicy.loanDays;
+    loan.maxRenewals = renewalPolicy.maxRenewals;
+    loan.overdueDailyRate = renewalPolicy.overdueDailyRate;
+    loan.policyTier = renewalPolicy.tier;
     loan.renewalRequestStatus = "none";
     loan.renewalDecisionAt = new Date();
     loan.renewalDecisionBy = req.user._id;
@@ -329,7 +370,7 @@ router.post("/:id/renew/approve", authRequired, requireRole("admin"), async (req
   }
 });
 
-router.post("/:id/renew/reject", authRequired, requireRole("admin"), async (req, res) => {
+router.post("/:id/renew/reject", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   try {
     const loan = await findLoanForUser(req.params.id);
     if (!loan) return res.status(404).json({ message: "Loan not found" });
@@ -364,11 +405,11 @@ router.post("/:id/return", authRequired, async (req, res) => {
     if (isLoanReturned(loan)) return res.status(400).json({ message: "Already returned" });
 
     const ownLoan = loan.user._id.toString() === req.user._id.toString();
-    const isAdmin = req.user.role === "admin";
-    if (!ownLoan && !isAdmin) return res.status(403).json({ message: "Forbidden" });
+    const canProcessReturn = canManageOtherUsers(req.user.role);
+    if (!ownLoan && !canProcessReturn) return res.status(403).json({ message: "Forbidden" });
     if (!isLoanApproved(loan)) return res.status(400).json({ message: "Only approved loans can be returned." });
 
-    if (!isAdmin) {
+    if (!canProcessReturn) {
       if (loan.returnRequestStatus === "pending") {
         return res.status(400).json({ message: "A return request is already waiting for admin processing." });
       }
@@ -413,12 +454,15 @@ router.post("/:id/return", authRequired, async (req, res) => {
 
     await persistBookAvailability(loan.book, getBookStock(loan.book) + 1);
 
+    const effectiveDueDate = loan.dueDate || resolveDueDate(loan, loan.book);
     const fineOutcome = calculateReturnFineOutcome({
-      dueDate: loan.dueDate,
+      dueDate: effectiveDueDate,
       returnedAt,
       currentOutstanding: loan.user?.finesOutstanding,
+      dailyRate: loan.overdueDailyRate,
+      demandScore: getBookDemandScore(loan.book),
     });
-    const { fineAmount } = fineOutcome;
+    const { dailyRate, fineAmount } = fineOutcome;
     let updatedUser = null;
 
     if (fineOutcome.shouldCreateFine) {
@@ -426,7 +470,7 @@ router.post("/:id/return", authRequired, async (req, res) => {
         user: loan.user._id,
         loan: loan._id,
         amount: fineAmount,
-        reason: "Overdue return",
+        reason: `Overdue return (${loan.policyTier || "standard"} demand at $${dailyRate.toFixed(2)}/day)`,
       });
 
       updatedUser = await User.findById(loan.user._id);
@@ -437,12 +481,12 @@ router.post("/:id/return", authRequired, async (req, res) => {
       await Alert.create([
         {
           type: "overdue",
-          message: `A fine of $${fineAmount.toFixed(2)} was added for overdue return of "${loan.book.title}".`,
+          message: `A fine of $${fineAmount.toFixed(2)} was added for overdue return of "${loan.book.title}" at $${dailyRate.toFixed(2)} per overdue day.`,
           recipient: loan.user._id,
         },
         {
           type: "fine",
-          message: `${loan.user?.name || "A borrower"} now has a $${fineAmount.toFixed(2)} overdue fine for "${loan.book.title}". Outstanding balance: $${fineOutcome.nextOutstanding.toFixed(2)}.`,
+          message: `${loan.user?.name || "A borrower"} now has a $${fineAmount.toFixed(2)} overdue fine for "${loan.book.title}" at $${dailyRate.toFixed(2)} per day. Outstanding balance: $${fineOutcome.nextOutstanding.toFixed(2)}.`,
           recipient: null,
         },
       ]);
@@ -474,7 +518,7 @@ router.post("/:id/return", authRequired, async (req, res) => {
   }
 });
 
-router.post("/:id/return/reject", authRequired, requireRole("admin"), async (req, res) => {
+router.post("/:id/return/reject", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   try {
     const loan = await findLoanForUser(req.params.id);
     if (!loan) return res.status(404).json({ message: "Loan not found" });
@@ -502,10 +546,14 @@ router.post("/:id/return/reject", authRequired, requireRole("admin"), async (req
   }
 });
 
-router.get("/reminders/simulate", authRequired, requireRole("librarian", "staff", "admin"), async (req, res) => {
+router.get("/reminders/simulate", authRequired, requireRole(...LOAN_MANAGER_ROLES), async (req, res) => {
   const activeLoans = await Loan.find(buildActiveLoanQuery())
     .populate("user", "name email")
     .populate("book", "title");
+  await Promise.all(activeLoans.map(async (loan) => {
+    const { changed } = synchronizeApprovedLoanSchedule(loan, loan.book);
+    if (changed) await loan.save();
+  }));
   const now = new Date();
 
   const reminders = activeLoans

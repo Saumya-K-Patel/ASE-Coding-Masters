@@ -40,3 +40,31 @@ test("existing outstanding fines remain even when a later return is on time", ()
   assert.equal(result.nextOutstanding, 7.5);
   assert.equal(result.isBlocked, true);
 });
+
+test("high-demand books accrue a steeper overdue fine per day", () => {
+  const result = calculateReturnFineOutcome({
+    dueDate: new Date("2026-04-01T00:00:00.000Z"),
+    returnedAt: new Date("2026-04-03T08:00:00.000Z"),
+    currentOutstanding: 0,
+    demandScore: 88,
+  });
+
+  assert.equal(result.dailyRate, 6);
+  assert.equal(result.fineAmount, 18);
+  assert.equal(result.nextOutstanding, 18);
+  assert.equal(result.isBlocked, true);
+});
+
+test("stored overdue rate overrides the default demand-based fine rate", () => {
+  const result = calculateReturnFineOutcome({
+    dueDate: new Date("2026-04-01T00:00:00.000Z"),
+    returnedAt: new Date("2026-04-02T03:00:00.000Z"),
+    currentOutstanding: 2,
+    demandScore: 88,
+    dailyRate: 4.5,
+  });
+
+  assert.equal(result.dailyRate, 4.5);
+  assert.equal(result.fineAmount, 9);
+  assert.equal(result.nextOutstanding, 11);
+});

@@ -4,6 +4,12 @@ import Book from "../models/Book.js";
 import Loan from "../models/Loan.js";
 import ResearchProject from "../models/ResearchProject.js";
 import { getBookLocation, getBookStock, getBookTotalCopies } from "../utils/bookRecord.js";
+import {
+  buildBookMatchContext as buildSharedBookMatchContext,
+  expandQueryTerms,
+  rankBooksByQuery as rankSharedBooksByQuery,
+  toTokenRegex,
+} from "../utils/librarySearch.js";
 
 const router = express.Router();
 
@@ -37,6 +43,16 @@ const STOP_WORDS = new Set([
   "which", "should", "read", "books", "book", "research", "please", "help", "me", "suggest", "some", "available", "you",
 ]);
 
+const MATCHABLE_BOOK_FIELDS = [
+  { label: "title", values: (book) => [book?.title] },
+  { label: "author", values: (book) => [book?.author] },
+  { label: "category", values: (book) => [book?.category] },
+  { label: "subject", values: (book) => [book?.subject] },
+  { label: "semantic topics", values: (book) => book?.semanticTopics || [] },
+  { label: "tags", values: (book) => book?.tags || [] },
+  { label: "course codes", values: (book) => book?.courseCodes || [] },
+];
+
 function getOllamaBaseUrl() {
   const baseUrl = process.env.OLLAMA_BASE_URL || process.env.AI_BASE_URL || DEFAULT_OLLAMA_BASE_URL;
   return baseUrl.replace(/\/+$/, "");
@@ -46,10 +62,58 @@ function getConfiguredOllamaModel() {
   return String(process.env.OLLAMA_MODEL || process.env.AI_MODEL || "").trim();
 }
 
+function extractTextFragments(value, depth = 0) {
+  if (depth > 5 || value == null) return [];
+  if (typeof value === "string") return [value];
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => extractTextFragments(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const preferredKeys = ["text", "content", "message", "response", "answer", "output", "summary"];
+    const fragments = preferredKeys.flatMap((key) => (
+      Object.prototype.hasOwnProperty.call(value, key)
+        ? extractTextFragments(value[key], depth + 1)
+        : []
+    ));
+
+    if (Array.isArray(value.parts)) {
+      fragments.push(...extractTextFragments(value.parts, depth + 1));
+    }
+
+    if (Array.isArray(value.messages)) {
+      fragments.push(...extractTextFragments(value.messages, depth + 1));
+    }
+
+    if (fragments.length) return fragments;
+
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized && serialized !== "{}" ? [serialized] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+export function normalizeModelText(value, fallback = "") {
+  const text = extractTextFragments(value)
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+  return text || fallback;
+}
+
 function mapMessages(messages) {
   return (messages || [])
     .slice(-6)
-    .map((msg) => ({ role: msg.role === "ai" ? "assistant" : msg.role, content: String(msg.text || msg.content || "") }))
+    .map((msg) => ({ role: msg.role === "ai" ? "assistant" : msg.role, content: normalizeModelText(msg.text ?? msg.content) }))
     .filter((msg) => ["user", "assistant"].includes(msg.role) && msg.content.trim().length > 0);
 }
 
@@ -69,33 +133,6 @@ function normalizeText(text) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function toTokenRegex(term) {
-  const escaped = escapeRegex(String(term || "").trim());
-  if (!escaped) return null;
-  return escaped.includes(" ") ? new RegExp(escaped, "i") : new RegExp(`\\b${escaped}\\b`, "i");
-}
-
-function expandedTermsFromQuery(query) {
-  const q = normalizeText(query);
-  const terms = new Set(q.split(/\s+/).filter(Boolean));
-  if (q) terms.add(q);
-
-  Object.entries(TOPIC_SYNONYMS).forEach(([topic, synonyms]) => {
-    const topicMatched = q.includes(topic) || [...terms].some((term) => topic.includes(term));
-    const synonymMatched = synonyms.some((syn) => q.includes(syn) || terms.has(syn));
-    if (topicMatched || synonymMatched) {
-      terms.add(topic);
-      synonyms.forEach((syn) => terms.add(syn));
-    }
-  });
-
-  return [...terms];
 }
 
 function termFreq(tokens) {
@@ -143,7 +180,7 @@ function weightedBookText(book) {
 }
 
 async function rankBooksForQuery(query, limit = 8) {
-  const expandedTerms = expandedTermsFromQuery(query);
+  const expandedTerms = expandQueryTerms(query);
   const regexes = expandedTerms.map((term) => toTokenRegex(term)).filter(Boolean);
 
   const directCandidates = await Book.find({
@@ -161,72 +198,31 @@ async function rankBooksForQuery(query, limit = 8) {
   }).limit(300);
 
   const books = directCandidates.length ? directCandidates : await Book.find({}).limit(500);
-  const expandedTokens = tokenize(expandedTerms.join(" "));
-  const queryFreq = termFreq(expandedTokens);
-
-  const docs = [];
-  const df = new Map();
-
-  books.forEach((book) => {
-    const tokens = tokenize(weightedBookText(book));
-    const freq = termFreq(tokens);
-    const tokenSet = new Set(tokens);
-    docs.push({ book, freq, tokenSet });
-    new Set(tokens).forEach((token) => {
-      df.set(token, (df.get(token) || 0) + 1);
-    });
-  });
-
-  const docCount = Math.max(docs.length, 1);
-  const idf = new Map();
-  df.forEach((value, token) => {
-    idf.set(token, Math.log(1 + docCount / (1 + value)));
-  });
-
-  const ranked = docs
-    .map(({ book, freq, tokenSet }) => {
-      const cosine = cosineSimilarity(queryFreq, freq, idf);
-      const overlap = overlapScore(expandedTokens, tokenSet);
-      const phraseBoost = expandedTerms.some((term) => {
-        const rx = toTokenRegex(term);
-        if (!rx) return false;
-        return (
-          rx.test(book.title || "")
-          || rx.test(book.category || "")
-          || (book.semanticTopics || []).some((topic) => rx.test(topic))
-          || (book.tags || []).some((tag) => rx.test(tag))
-        );
-      })
-        ? 0.25
-        : 0;
-
-      const stockBoost = getBookStock(book) > 0 ? 0.05 : 0;
-      const score = cosine * 0.62 + overlap * 0.33 + phraseBoost + stockBoost;
-      return { book, score };
-    })
-    .filter((entry) => entry.score > 0.08)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((entry) => entry.book);
-
-  return ranked;
+  return rankSharedBooksByQuery(query, books, { limit }).map((entry) => entry.book);
 }
 
-function buildBookSources(books) {
-  return (books || []).map((book) => ({
-    bookId: book._id,
-    title: book.title,
-    author: book.author,
-    category: book.category,
-    stock: getBookStock(book),
-    totalCopies: getBookTotalCopies(book),
-    location: getBookLocation(book),
-  }));
+function buildBookSources(books, queryText) {
+  return (books || []).map((book) => {
+    const matchContext = buildBookMatchContext(book, queryText);
+    return {
+      bookId: book._id,
+      title: book.title,
+      author: book.author,
+      category: book.category,
+      stock: getBookStock(book),
+      totalCopies: getBookTotalCopies(book),
+      location: getBookLocation(book),
+      matchedTerms: matchContext.matchedTerms,
+      matchedFields: matchContext.matchedFields,
+      whyRelevant: matchContext.summary,
+    };
+  });
 }
 
-function topBookSignals(book) {
+function topBookSignals(book, queryText) {
   const location = getBookLocation(book);
-  return `${book.title} by ${book.author} | ${book.category} | Floor ${location.floor} | Shelf ${location.shelf} | Stock ${getBookStock(book)}/${getBookTotalCopies(book)}`;
+  const matchContext = buildBookMatchContext(book, queryText);
+  return `${book.title} by ${book.author} | ${book.category} | Floor ${location.floor} | Shelf ${location.shelf} | Stock ${getBookStock(book)}/${getBookTotalCopies(book)} | ${matchContext.summary}`;
 }
 
 function uniqueStrings(values) {
@@ -237,6 +233,18 @@ function uniqueStrings(values) {
     seen.add(key);
     return true;
   });
+}
+
+function joinWithAnd(values) {
+  const items = values.filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+export function buildBookMatchContext(book, queryText, expandedTerms = expandQueryTerms(queryText)) {
+  return buildSharedBookMatchContext(book, queryText, expandedTerms);
 }
 
 function buildSuggestedPrompts({ queryText, books, activeProjects }) {
@@ -262,7 +270,7 @@ function buildSuggestedPrompts({ queryText, books, activeProjects }) {
 function buildFallbackReply({ userText, books, activeProjects, activeLoans }) {
   const topBooks = (books || []).slice(0, 4);
   const booksBlock = topBooks.length
-    ? topBooks.map((book, index) => `${index + 1}. ${topBookSignals(book)}`).join("\n")
+    ? topBooks.map((book, index) => `${index + 1}. ${topBookSignals(book, userText)}`).join("\n")
     : "No close library matches were found. Try broadening the topic keywords.";
 
   const projectsLine = activeProjects.length
@@ -291,7 +299,7 @@ function buildFallbackPayload({ userText, books, activeProjects, activeLoans, mo
     reply: buildFallbackReply({ userText, books, activeProjects, activeLoans }),
     provider: "local-library-fallback",
     model,
-    sources: buildBookSources(books),
+    sources: buildBookSources(books, userText),
     latencyMs,
     suggestedPrompts: suggestedPrompts || [],
     context: {
@@ -396,7 +404,7 @@ async function chatWithOllama(messages) {
   });
 
   return {
-    reply: String(data?.message?.content || "").trim(),
+    reply: normalizeModelText(data?.message?.content ?? data?.response ?? data?.message),
     model: String(data?.model || model).trim() || model,
     installedModels,
   };
@@ -405,7 +413,7 @@ async function chatWithOllama(messages) {
 router.post("/assistant", authRequired, async (req, res) => {
   const startedAt = Date.now();
   try {
-    const text = String(req.body.message || "").trim();
+    const text = normalizeModelText(req.body.message).trim();
     const history = mapMessages(req.body.messages);
     if (!text && !history.length) return res.status(400).json({ message: "Message is required" });
 
@@ -455,7 +463,7 @@ router.post("/assistant", authRequired, async (req, res) => {
       : "None";
 
     const booksContext = booksForContext.length
-      ? booksForContext.map((book, idx) => `${idx + 1}. ${topBookSignals(book)}`).join("\n")
+      ? booksForContext.map((book, idx) => `${idx + 1}. ${topBookSignals(book, queryText)}`).join("\n")
       : "None";
 
     const systemPrompt = [
@@ -507,7 +515,7 @@ router.post("/assistant", authRequired, async (req, res) => {
         reply,
         provider: "ollama",
         model,
-        sources: buildBookSources(booksForContext),
+        sources: buildBookSources(booksForContext, queryText),
         latencyMs: Date.now() - startedAt,
         suggestedPrompts,
         context: {
