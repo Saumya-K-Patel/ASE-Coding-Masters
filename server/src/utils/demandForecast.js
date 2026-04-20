@@ -40,6 +40,15 @@ function getRecommendation(score, stock, totalCopies, signals) {
   return "Adequate";
 }
 
+function getBorrowedCopies(stock, totalCopies) {
+  return Math.max(0, totalCopies - stock);
+}
+
+function getBorrowPressurePercent(stock, totalCopies) {
+  if (totalCopies <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((getBorrowedCopies(stock, totalCopies) / totalCopies) * 100)));
+}
+
 function getSignalSummary(signals) {
   const summary = [];
   if (signals.pendingReservations) summary.push(`${signals.pendingReservations} pending reservation(s)`);
@@ -55,6 +64,8 @@ function getSignalSummary(signals) {
 export function calculateDemandForecastForBook(book, bookLoans, bookSubscriptions = [], now = new Date()) {
   const totalCopies = Math.max(Number(book?.totalCopies) || 0, Number(book?.stock) || 0, 1);
   const stock = Math.max(0, Number(book?.stock) || 0);
+  const borrowedCopies = getBorrowedCopies(stock, totalCopies);
+  const borrowPressurePercent = getBorrowPressurePercent(stock, totalCopies);
 
   const signals = {
     pendingReservations: 0,
@@ -129,9 +140,12 @@ export function calculateDemandForecastForBook(book, bookLoans, bookSubscription
     title: book.title,
     category: book.category,
     demandScore,
+    demandBarPercent: borrowPressurePercent,
     examSeasonImpact: book.examSeasonImpact,
     stock,
     totalCopies,
+    borrowedCopies,
+    borrowedRatio: totalCopies > 0 ? Number((borrowedCopies / totalCopies).toFixed(2)) : 0,
     recommendation: getRecommendation(demandScore, stock, totalCopies, signals),
     signals,
     signalSummary: getSignalSummary(signals),
