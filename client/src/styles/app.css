@@ -48,9 +48,19 @@
 .form-grid input,
 .form-grid select {
   border-radius: 10px;
-  border: 1px solid #d5dfea;
+  border: 1.5px solid #b3c6e0;
   padding: 10px 12px;
   background: #f9fbfd;
+  transition: border-color 0.2s;
+}
+
+.auth-form input:focus,
+.row input:focus,
+.row select:focus,
+.form-grid input:focus,
+.form-grid select:focus {
+  border-color: var(--brand-blue);
+  outline: none;
 }
 
 button {
@@ -65,9 +75,11 @@ button {
 }
 
 button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 20px rgba(62, 101, 209, 0.3);
-  filter: saturate(1.08);
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 12px 24px rgba(62, 101, 209, 0.35);
+  filter: saturate(1.12) brightness(1.04);
+  outline: 2px solid var(--brand-amber);
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -1383,3 +1395,5 @@ thead th {
     flex-direction: column;
   }
 }
+/* ── Polished inventory and analytics refinements ── */
+.analytics-skeleton-grid { min-height: 120px; }

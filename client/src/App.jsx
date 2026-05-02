@@ -115,7 +115,7 @@ const adminTabs = [
   { key: "borrowers", label: "Borrowers" },
   { key: "fines", label: "Fine Clearance" },
   { key: "demand", label: "Demand Predictor" },
-  { key: "analytics", label: "Analytics" },
+  { key: "analytics Dashboard", label: "Analytics Dashboard" },
   { key: "alerts", label: "Notifications" },
 ];
 
