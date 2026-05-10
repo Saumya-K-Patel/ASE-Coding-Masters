@@ -1,3 +1,38 @@
+/* Tooltip styles for highlighted message on hover */
+.highlight-tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.highlight-tooltip .highlight-tooltip-text {
+  visibility: hidden;
+  min-width: 320px;
+  max-width: 400px;
+  background: #fff0f0;
+  color: #b91c1c;
+  text-align: left;
+  border-radius: 8px;
+  border: 1.5px solid #fca5a5;
+  padding: 14px 18px;
+  position: absolute;
+  z-index: 100;
+  bottom: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-size: 15px;
+  font-weight: 500;
+  box-shadow: 0 6px 24px rgba(185,28,28,0.08);
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.highlight-tooltip:hover .highlight-tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
 :root {
   --brand-blue: #2b5fb8;
   --brand-cyan: #2f8fb7;
@@ -1507,7 +1542,7 @@ thead th {
 }
 
 .shelf.active {
-  border-color: #2563eb;
+  border-color: #eb24eb;
   background: #dce8ff;
   color: #1347b8;
   font-weight: 700;
@@ -1634,3 +1669,10 @@ thead th {
 }
 /* ── Polished inventory and analytics refinements ── */
 .analytics-skeleton-grid { min-height: 120px; }
+
+.card.active {
+  border: 2px solid #2563eb;
+  background: #e6f0ff;
+  box-shadow: 0 0 0 2px #2563eb33;
+  transition: border-color 0.2s, background 0.2s;
+}

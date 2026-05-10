@@ -21,8 +21,8 @@ const app = express();
 
 const allowedOrigins = [
   process.env.CLIENT_ORIGIN,
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+  ...Array.from({ length: 18 }, (_, i) => `http://localhost:${5173 + i}`),
+  ...Array.from({ length: 18 }, (_, i) => `http://127.0.0.1:${5173 + i}`),
 ].filter(Boolean);
 
 app.use(
