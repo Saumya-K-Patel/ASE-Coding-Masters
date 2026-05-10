@@ -388,12 +388,13 @@ router.post("/:id/return", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Only admin can process returns after a user submits a return request." });
     }
 
-    const returnedAt = new Date();
-    loan.returnedAt = returnedAt;
+    // Use the user's returnRequestedAt as the effective return date for fine calculation
+    const effectiveReturnAt = loan.returnRequestedAt || new Date();
+    loan.returnedAt = effectiveReturnAt;
     loan.status = "returned";
     loan.returnRequestStatus = "none";
     loan.returnRequestedAt = null;
-    loan.returnDecisionAt = returnedAt;
+    loan.returnDecisionAt = new Date(); // admin's actual decision time
     loan.returnDecisionBy = req.user._id;
     loan.returnRejectionReason = "";
     loan.renewalRequestStatus = "none";
@@ -401,7 +402,7 @@ router.post("/:id/return", authRequired, async (req, res) => {
 
     await persistBookAvailability(loan.book, getBookStock(loan.book) + 1);
 
-    const fineAmount = loan.dueDate ? computeFineFromDates(new Date(loan.dueDate), returnedAt) : 0;
+    const fineAmount = loan.dueDate ? computeFineFromDates(new Date(loan.dueDate), effectiveReturnAt) : 0;
     let updatedUser = null;
 
     if (fineAmount > 0) {

@@ -6,7 +6,7 @@ import { requireRole } from "../middleware/roles.js";
 
 const router = express.Router();
 
-router.get("/forecast", authRequired, requireRole("librarian", "staff", "admin", "faculty"), async (req, res) => {
+router.get("/forecast", authRequired, async (req, res) => {
   const borrowFrequency = await Loan.aggregate([
     {
       $group: {
