@@ -33,10 +33,18 @@ function fmtLongDate(value) {
   }).format(new Date(value));
 }
 
-function daysLeft(value) {
-  const due = new Date(value);
-  const now = new Date();
-  return Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+function startOfDay(value) {
+  const parsed = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+}
+
+function daysLeft(value, now = new Date()) {
+  const due = startOfDay(value);
+  const today = startOfDay(now);
+  if (!due || !today) return 0;
+  return Math.round((due - today) / (1000 * 60 * 60 * 24));
 }
 
 function timeAgo(value) {
@@ -51,10 +59,116 @@ function timeAgo(value) {
   return `${Math.floor(diffDays / 7)} weeks ago`;
 }
 
+function flattenTextParts(value, depth = 0) {
+  if (depth > 5 || value == null) return [];
+  if (typeof value === "string") return [value];
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenTextParts(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const preferredKeys = ["text", "content", "message", "response", "summary", "title", "label"];
+    const nested = preferredKeys.flatMap((key) => (
+      Object.prototype.hasOwnProperty.call(value, key)
+        ? flattenTextParts(value[key], depth + 1)
+        : []
+    ));
+
+    if (nested.length) return nested;
+
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized && serialized !== "{}" ? [serialized] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function asDisplayText(value, fallback = "") {
+  const text = flattenTextParts(value)
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return text || fallback;
+}
+
 function toneByDemand(score) {
   if (score > 40) return "danger";
   if (score > 24) return "warn";
   return "ok";
+}
+
+function clampPercent(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function getBorrowedCopies(item) {
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  const stock = Math.max(0, Number(item?.stock) || 0);
+  const explicitBorrowed = Number(item?.borrowedCopies);
+
+  if (Number.isFinite(explicitBorrowed) && explicitBorrowed >= 0) {
+    return Math.min(totalCopies, Math.round(explicitBorrowed));
+  }
+
+  return Math.max(0, totalCopies - stock);
+}
+
+function getBorrowPressurePercent(item) {
+  const explicitPercent = Number(item?.demandBarPercent);
+  if (Number.isFinite(explicitPercent)) return clampPercent(explicitPercent);
+
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  if (totalCopies <= 0) return 0;
+  return clampPercent((getBorrowedCopies(item) / totalCopies) * 100);
+}
+
+function toneByBorrowPressure(percent) {
+  if (percent >= 80) return "danger";
+  if (percent >= 45) return "warn";
+  return "ok";
+}
+
+function formatBorrowPressure(item) {
+  const totalCopies = Math.max(Number(item?.totalCopies) || 0, Number(item?.stock) || 0, 0);
+  return `${getBorrowedCopies(item)}/${totalCopies || 0} borrowed`;
+}
+
+function formatRenewalPolicy(maxRenewals) {
+  const renewals = Number(maxRenewals);
+  if (!Number.isFinite(renewals) || renewals <= 0) return "No renewals";
+  return `${renewals} renewal${renewals === 1 ? "" : "s"}`;
+}
+
+function getLoanPolicyView(loan) {
+  const policy = loan?.policy || loan || {};
+  const loanDays = Number(policy.loanDays ?? policy.borrowPolicyDays);
+  const maxRenewals = Number(policy.maxRenewals);
+  const overdueDailyRate = Number(policy.overdueDailyRate);
+  const policyTier = String(policy.tier || policy.policyTier || "").trim();
+
+  const pieces = [];
+  if (Number.isFinite(loanDays) && loanDays > 0) {
+    pieces.push(`${loanDays} day loan`);
+  }
+  pieces.push(formatRenewalPolicy(maxRenewals));
+  if (Number.isFinite(overdueDailyRate) && overdueDailyRate > 0) {
+    pieces.push(`$${overdueDailyRate.toFixed(2)}/day overdue`);
+  }
+
+  return {
+    label: pieces.filter(Boolean).join(" • "),
+    tier: policyTier,
+  };
 }
 
 function keyActivatesCard(e) {
@@ -305,12 +419,24 @@ function hasPendingRenewal(loan) {
   return loan?.renewalRequestStatus === "pending";
 }
 
+function hasRejectedRenewal(loan) {
+  return loan?.renewalRequestStatus === "rejected";
+}
+
 function hasPendingReturn(loan) {
   return loan?.returnRequestStatus === "pending";
 }
 
 function hasRejectedReturn(loan) {
   return loan?.returnRequestStatus === "rejected";
+}
+
+function canRequestRenewal(loan) {
+  const maxRenewals = Number(loan?.policy?.maxRenewals ?? loan?.maxRenewals);
+  const renewalCount = Number(loan?.renewalCount);
+  if (!Number.isFinite(maxRenewals) || maxRenewals <= 0) return false;
+  if (!Number.isFinite(renewalCount)) return true;
+  return renewalCount < maxRenewals;
 }
 
 const adminTabs = [
@@ -337,6 +463,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authForm, setAuthForm] = useState({ email: "admin@uni.edu", password: "password123" });
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [timeMarker, setTimeMarker] = useState(() => Date.now());
 
   const [books, setBooks] = useState([]);
   const [loans, setLoans] = useState([]);
