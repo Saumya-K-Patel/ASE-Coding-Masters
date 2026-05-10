@@ -10,18 +10,59 @@ const milestoneSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const taskSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ["todo", "in_progress", "done"],
+      default: "todo",
+    },
+    dueDate: { type: Date, default: null },
+    notes: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const sourceBookSchema = new mongoose.Schema(
+  {
+    book: { type: mongoose.Schema.Types.ObjectId, ref: "Book", required: true },
+    status: {
+      type: String,
+      enum: ["saved", "reading", "cited"],
+      default: "saved",
+    },
+    notes: { type: String, default: "" },
+    addedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const researchProjectSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     topic: { type: String, required: true },
     researchQuestion: { type: String, default: "" },
     methodology: { type: String, default: "" },
-    keywords: [{ type: String }],
     status: {
       type: String,
-      enum: ["planning", "literature-review", "drafting", "completed"],
+      enum: [
+        "planning",
+        "sourcing",
+        "reading",
+        "writing",
+        "revising",
+        "completed",
+        "literature-review",
+        "drafting",
+      ],
       default: "planning",
     },
+    keywords: [{ type: String }],
+    notes: { type: String, default: "" },
+    targetCompletionDate: { type: Date, default: null },
+    tasks: [taskSchema],
+    sourceBooks: [sourceBookSchema],
     milestones: [milestoneSchema],
   },
   { timestamps: true }

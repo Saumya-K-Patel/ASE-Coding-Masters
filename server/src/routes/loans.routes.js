@@ -7,8 +7,16 @@ import Alert from "../models/Alert.js";
 import Subscription from "../models/Subscription.js";
 import { authRequired } from "../middleware/auth.js";
 import { requireRole } from "../middleware/roles.js";
-import { computeFineFromDates, getLoanDaysByDemand } from "../utils/loanPolicy.js";
-import { getBookDemandScore, getBookStock, serializeBook, setBookStock } from "../utils/bookRecord.js";
+import { getLoanDaysByDemand } from "../utils/loanPolicy.js";
+import { calculateReturnFineOutcome } from "../utils/loanFineProcessing.js";
+import {
+  getBorrowDemandDelta,
+  getBookDemandScore,
+  getBookStock,
+  increaseBookDemandScore,
+  serializeBook,
+  setBookStock,
+} from "../utils/bookRecord.js";
 
 const router = express.Router();
 
@@ -54,6 +62,8 @@ async function persistBookAvailability(book, nextStock) {
     { _id: book._id },
     {
       $set: {
+        demandScore: getBookDemandScore(book),
+        demandVersion: Number(book.demandVersion) || 2,
         stock: book.stock,
         totalCopies: book.totalCopies,
         location: book.location,
@@ -188,7 +198,9 @@ router.post("/:id/approve", authRequired, requireRole("admin"), async (req, res)
     loan.maxRenewals = Number(loan.book?.borrowPolicy?.maxRenewals) || loan.maxRenewals || 2;
     await loan.save();
 
-    await persistBookAvailability(loan.book, stock - 1);
+    const nextStock = stock - 1;
+    increaseBookDemandScore(loan.book, getBorrowDemandDelta(loan.book, nextStock));
+    await persistBookAvailability(loan.book, nextStock);
 
     await Alert.create({
       type: "reservation",
@@ -401,10 +413,15 @@ router.post("/:id/return", authRequired, async (req, res) => {
 
     await persistBookAvailability(loan.book, getBookStock(loan.book) + 1);
 
-    const fineAmount = loan.dueDate ? computeFineFromDates(new Date(loan.dueDate), returnedAt) : 0;
+    const fineOutcome = calculateReturnFineOutcome({
+      dueDate: loan.dueDate,
+      returnedAt,
+      currentOutstanding: loan.user?.finesOutstanding,
+    });
+    const { fineAmount } = fineOutcome;
     let updatedUser = null;
 
-    if (fineAmount > 0) {
+    if (fineOutcome.shouldCreateFine) {
       await Fine.create({
         user: loan.user._id,
         loan: loan._id,
@@ -413,15 +430,22 @@ router.post("/:id/return", authRequired, async (req, res) => {
       });
 
       updatedUser = await User.findById(loan.user._id);
-      updatedUser.finesOutstanding = Number((updatedUser.finesOutstanding + fineAmount).toFixed(2));
-      updatedUser.isBlocked = updatedUser.finesOutstanding > 0;
+      updatedUser.finesOutstanding = fineOutcome.nextOutstanding;
+      updatedUser.isBlocked = fineOutcome.isBlocked;
       await updatedUser.save();
 
-      await Alert.create({
-        type: "overdue",
-        message: `A fine of $${fineAmount.toFixed(2)} was added for overdue return of "${loan.book.title}".`,
-        recipient: loan.user._id,
-      });
+      await Alert.create([
+        {
+          type: "overdue",
+          message: `A fine of $${fineAmount.toFixed(2)} was added for overdue return of "${loan.book.title}".`,
+          recipient: loan.user._id,
+        },
+        {
+          type: "fine",
+          message: `${loan.user?.name || "A borrower"} now has a $${fineAmount.toFixed(2)} overdue fine for "${loan.book.title}". Outstanding balance: $${fineOutcome.nextOutstanding.toFixed(2)}.`,
+          recipient: null,
+        },
+      ]);
     } else {
       await Alert.create({
         type: "return",

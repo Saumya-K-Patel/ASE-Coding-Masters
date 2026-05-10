@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "test:loan-fines": "node --test tests/loanFineCollection.test.js",
+    "test:demand-score": "node --test tests/demandScoreCalibration.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -7,8 +7,8 @@ import { authRequired } from "../middleware/auth.js";
 const router = express.Router();
 
 router.get("/", authRequired, async (req, res) => {
-  const isAdmin = req.user.role === "admin";
-  const query = isAdmin
+  const canReadGlobalAlerts = ["librarian", "staff", "admin"].includes(req.user.role);
+  const query = canReadGlobalAlerts
     ? { $or: [{ recipient: req.user._id }, { recipient: null }] }
     : { recipient: req.user._id };
   const alerts = await Alert.find(query).sort({ createdAt: -1 }).limit(50);
@@ -18,7 +18,7 @@ router.get("/", authRequired, async (req, res) => {
 router.post("/:id/read", authRequired, async (req, res) => {
   const alert = await Alert.findById(req.params.id);
   if (!alert) return res.status(404).json({ message: "Alert not found" });
-  const canReadGlobalAlert = req.user.role === "admin" && !alert.recipient;
+  const canReadGlobalAlert = ["librarian", "staff", "admin"].includes(req.user.role) && !alert.recipient;
   if (!canReadGlobalAlert && alert.recipient?.toString() !== req.user._id.toString()) {
     return res.status(403).json({ message: "Forbidden" });
   }
