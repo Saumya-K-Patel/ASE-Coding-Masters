@@ -27,6 +27,7 @@ router.post("/:id/verify-payment", authRequired, requireRole("librarian", "staff
   const totalOutstanding = pendingFines.reduce((sum, item) => sum + item.amount, 0);
 
   const user = await User.findById(fine.user);
+  if (!user) return res.status(404).json({ message: "User not found" });
   user.finesOutstanding = Number(totalOutstanding.toFixed(2));
   user.isBlocked = user.finesOutstanding > 0;
   await user.save();
@@ -37,6 +38,11 @@ router.post("/:id/verify-payment", authRequired, requireRole("librarian", "staff
       ? `Payment verified for fine of $${fine.amount.toFixed(2)}. Note: ${fine.resolutionNote}`
       : `Payment verified for fine of $${fine.amount.toFixed(2)}.`,
     recipient: user._id,
+  });
+  await Alert.create({
+    type: "fine",
+    message: `${user.name}'s fine payment of $${fine.amount.toFixed(2)} was verified by ${req.user.name}. Remaining outstanding balance: $${user.finesOutstanding.toFixed(2)}.`,
+    recipient: null,
   });
 
   return res.json({ fine, user });
@@ -57,6 +63,7 @@ router.post("/:id/waive", authRequired, requireRole("admin"), async (req, res) =
   const totalOutstanding = pendingFines.reduce((sum, item) => sum + item.amount, 0);
 
   const user = await User.findById(fine.user);
+  if (!user) return res.status(404).json({ message: "User not found" });
   user.finesOutstanding = Number(totalOutstanding.toFixed(2));
   user.isBlocked = user.finesOutstanding > 0;
   await user.save();
@@ -65,6 +72,11 @@ router.post("/:id/waive", authRequired, requireRole("admin"), async (req, res) =
     type: "fine",
     message: `A fine of $${fine.amount.toFixed(2)} was waived. Note: ${fine.resolutionNote}`,
     recipient: user._id,
+  });
+  await Alert.create({
+    type: "fine",
+    message: `${req.user.name} waived $${fine.amount.toFixed(2)} from ${user.name}'s account. Remaining outstanding balance: $${user.finesOutstanding.toFixed(2)}.`,
+    recipient: null,
   });
 
   return res.json({ fine, user });
@@ -79,6 +91,19 @@ router.post("/:id/override-block", authRequired, requireRole("librarian", "staff
 
   user.isBlocked = false;
   await user.save();
+
+  await Alert.create([
+    {
+      type: "fine",
+      message: "Your borrowing block was manually lifted by the library team.",
+      recipient: user._id,
+    },
+    {
+      type: "fine",
+      message: `${req.user.name} manually lifted the borrowing block for ${user.name}.`,
+      recipient: null,
+    },
+  ]);
 
   return res.json({ message: "Borrowing block manually overridden", user });
 });
