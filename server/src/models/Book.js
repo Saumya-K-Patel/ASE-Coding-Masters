@@ -7,6 +7,7 @@ const bookSchema = new mongoose.Schema(
     author: { type: String, required: true },
     category: { type: String, required: true },
     isbn: { type: String, required: true },
+    coverImageUrl: { type: String, default: "" },
     totalCopies: { type: Number, default: 1, min: 0 },
     stock: { type: Number, default: 1, min: 0 },
     location: {
@@ -15,6 +16,7 @@ const bookSchema = new mongoose.Schema(
       row: { type: Number, default: 1 },
     },
     demandScore: { type: Number, default: 0, min: 0, max: 100 },
+    demandVersion: { type: Number, default: 1 },
     examSeasonImpact: {
       type: String,
       enum: ["Low", "Medium", "High", "Very High"],

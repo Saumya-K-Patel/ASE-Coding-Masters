@@ -632,10 +632,21 @@ async function seed() {
   await ResearchProject.create({
     user: student._id,
     topic: "Impact of AI on Academic Libraries",
-    milestones: [
-      { phase: "Topic Selection", progress: 100, milestone: "Define research question", notes: "Question finalized" },
-      { phase: "Literature Review", progress: 65, milestone: "Read 20 papers", notes: "14 papers reviewed" },
-      { phase: "Methodology", progress: 20, milestone: "Design framework", notes: "Mixed-method approach" },
+    researchQuestion: "How is AI changing library discovery, circulation, and research support in universities?",
+    methodology: "Comparative literature review with service design analysis",
+    status: "reading",
+    keywords: ["academic libraries", "artificial intelligence", "discovery systems", "student research"],
+    notes: "Focus on practical workflow changes rather than speculative automation claims.",
+    targetCompletionDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 12),
+    sourceBooks: [
+      { book: books[0]._id, status: "reading" },
+      { book: books[1]._id, status: "saved" },
+      { book: books[2]._id, status: "cited" },
+    ],
+    tasks: [
+      { title: "Finalize the scope of the research question", status: "done", notes: "Question approved by supervisor" },
+      { title: "Review and annotate core library systems sources", status: "in_progress", notes: "8 annotations completed" },
+      { title: "Draft findings section on circulation workflows", status: "todo", notes: "" },
     ],
   });
 

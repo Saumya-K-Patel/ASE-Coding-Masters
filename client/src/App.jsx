@@ -2,6 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import { api, setAuthToken } from "./api";
 
 const adminRoles = ["librarian", "staff", "admin"];
+const researchStatusOptions = ["planning", "sourcing", "reading", "writing", "revising", "completed"];
+const taskStatusCycle = {
+  todo: "in_progress",
+  in_progress: "done",
+  done: "todo",
+};
+
+const initialResearchForm = {
+  topic: "",
+  researchQuestion: "",
+  methodology: "",
+  keywords: "",
+  notes: "",
+  status: "planning",
+  targetCompletionDate: "",
+};
 
 function fmtDate(value) {
   if (!value) return "-";
@@ -36,8 +52,8 @@ function timeAgo(value) {
 }
 
 function toneByDemand(score) {
-  if (score > 80) return "danger";
-  if (score > 55) return "warn";
+  if (score > 40) return "danger";
+  if (score > 24) return "warn";
   return "ok";
 }
 
@@ -60,25 +76,213 @@ function formatAiProvider(provider) {
   return provider;
 }
 
-function formatSearchLabel(value) {
+function formatWorkflowLabel(value) {
   return String(value || "")
+    .replace(/[_-]+/g, " ")
     .split(" ")
-    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
 
-function formatProjectStatus(value) {
-  return formatSearchLabel(String(value || "").replace(/-/g, " "));
+function getResearchTasks(project) {
+  return Array.isArray(project?.tasks) ? project.tasks : [];
 }
 
-function uniqueItems(values) {
-  const seen = new Set();
-  return values.filter((value) => {
-    const key = String(value || "").trim().toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+function getResearchTaskStats(project) {
+  const tasks = getResearchTasks(project);
+  const done = tasks.filter((task) => task.status === "done").length;
+  const active = tasks.filter((task) => task.status === "in_progress").length;
+  return {
+    total: tasks.length,
+    done,
+    active,
+    remaining: Math.max(tasks.length - done, 0),
+  };
+}
+
+function getResearchProgress(project) {
+  const stats = getResearchTaskStats(project);
+  if (!stats.total) return 0;
+  return Math.round((stats.done / stats.total) * 100);
+}
+
+function hashCode(value) {
+  return Array.from(String(value || "")).reduce((total, char) => ((total << 5) - total) + char.charCodeAt(0), 0);
+}
+
+function buildBookSearchText(book) {
+  return [
+    book?.title,
+    book?.author,
+    book?.category,
+    ...(Array.isArray(book?.semanticTopics) ? book.semanticTopics : []),
+    ...(Array.isArray(book?.tags) ? book.tags : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function uniqueList(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function toKeywordTokens(value) {
+  return uniqueList(
+    String(value || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 2)
+  );
+}
+
+function getProjectTokens(project) {
+  return uniqueList([
+    ...toKeywordTokens(project?.topic),
+    ...toKeywordTokens(project?.researchQuestion),
+    ...toKeywordTokens(project?.methodology),
+    ...(Array.isArray(project?.keywords) ? project.keywords.flatMap((keyword) => toKeywordTokens(keyword)) : []),
+  ]);
+}
+
+function getBookThemes(book) {
+  return uniqueList([
+    ...(Array.isArray(book?.semanticTopics) ? book.semanticTopics : []),
+    ...(Array.isArray(book?.tags) ? book.tags : []),
+    book?.category,
+  ].map((item) => String(item || "").trim()).filter(Boolean));
+}
+
+function getMatchedThemes(project, book) {
+  const tokens = getProjectTokens(project);
+  const themes = getBookThemes(book);
+  const haystack = buildBookSearchText(book);
+
+  const directThemeMatches = themes.filter((theme) => tokens.some((token) => theme.toLowerCase().includes(token)));
+  const tokenMatches = tokens.filter((token) => haystack.includes(token));
+
+  return uniqueList([...directThemeMatches, ...tokenMatches]).slice(0, 4);
+}
+
+function scoreBookForProject(project, book) {
+  const tokens = getProjectTokens(project);
+
+  if (!tokens.length) return 0;
+
+  const haystack = buildBookSearchText(book);
+  const matchedThemes = getMatchedThemes(project, book);
+  return tokens.reduce((score, token) => (
+    haystack.includes(token) ? score + (book?.title?.toLowerCase().includes(token) ? 5 : 2) : score
+  ), 0) + (matchedThemes.length * 4) + Math.round((Number(book?.demandScore) || 0) / 20);
+}
+
+function getPopularComparisonBooks(book, allBooks) {
+  return [...allBooks]
+    .filter((candidate) => String(candidate?._id) !== String(book?._id))
+    .sort((left, right) => (Number(right?.demandScore) || 0) - (Number(left?.demandScore) || 0))
+    .slice(0, 3);
+}
+
+function buildBookOfferSummary(project, book, matchedThemes) {
+  const focusLabel = matchedThemes[0] || book?.category || "your topic";
+  const nextLabel = matchedThemes[1] || (Array.isArray(book?.semanticTopics) ? book.semanticTopics[0] : "") || "";
+
+  if (String(book?.title || "").toLowerCase().includes("research")) {
+    return `This title is strongest for shaping the structure of "${project?.topic || focusLabel}" because it gives you research language, framing, and methodology cues you can reuse in your review.`;
+  }
+
+  if ((Number(book?.demandScore) || 0) >= 40) {
+    return `This is one of the library's most-used titles in this space. It gives you a strong overview of ${focusLabel}${nextLabel ? ` and ${nextLabel}` : ""}, so it works well as a primer before you move into narrower sources.`;
+  }
+
+  return `This book is most useful for "${project?.topic || focusLabel}" when you need grounded coverage of ${focusLabel}${nextLabel ? ` with extra attention to ${nextLabel}` : ""}. It looks more focused than a general survey text.`;
+}
+
+function buildDifferenceSummary(book, allBooks) {
+  const comparisonBooks = getPopularComparisonBooks(book, allBooks);
+  if (!comparisonBooks.length) {
+    return "This title currently stands on its own in the catalog, so it can serve as a distinctive angle for your reading list.";
+  }
+
+  const comparisonTitles = comparisonBooks.map((item) => item.title).join(", ");
+  const comparisonThemes = uniqueList(comparisonBooks.flatMap((item) => getBookThemes(item).map((theme) => theme.toLowerCase())));
+  const uniqueThemes = getBookThemes(book).filter((theme) => !comparisonThemes.includes(theme.toLowerCase()));
+
+  if (uniqueThemes.length) {
+    return `Compared with popular titles like ${comparisonTitles}, this book is more specific about ${uniqueThemes.slice(0, 2).join(" and ")}, which gives you a less generic angle for analysis.`;
+  }
+
+  return `Compared with popular titles like ${comparisonTitles}, this book looks most useful as a complementary perspective rather than a duplicate, especially if you want a different author voice or narrower treatment of the topic.`;
+}
+
+function buildRelevantSections(project, book, matchedThemes) {
+  const sections = [];
+  const methodologyText = String(project?.methodology || "").toLowerCase();
+
+  if (matchedThemes[0]) {
+    sections.push(`Start with chapters or sections on ${matchedThemes[0]}.`);
+  }
+
+  if (matchedThemes[1]) {
+    sections.push(`Use the table of contents or index to find places where ${matchedThemes[0] || project?.topic || "the topic"} connects to ${matchedThemes[1]}.`);
+  }
+
+  if (methodologyText.includes("compare") || methodologyText.includes("compar")) {
+    sections.push("Prioritize comparison, contrast, or case-study sections that let you weigh multiple viewpoints.");
+  } else if (methodologyText.includes("review") || methodologyText.includes("literature")) {
+    sections.push("Read overview and synthesis sections first so you can build a cleaner literature review outline.");
+  } else if (methodologyText.includes("method")) {
+    sections.push("Scan the framework or methods-oriented sections first to strengthen your project design.");
+  }
+
+  if ((Number(book?.demandScore) || 0) >= 40) {
+    sections.push("Read the introduction and early overview chapters first; this is already a popular primer in the library.");
+  }
+
+  if (!sections.length) {
+    sections.push(`Begin with the introduction, then jump to sections tied to ${book?.category || "the main subject"} using the index.`);
+  }
+
+  return uniqueList(sections).slice(0, 3);
+}
+
+function buildBookInsight(project, book, allBooks) {
+  const matchedThemes = getMatchedThemes(project, book);
+  return {
+    matchedThemes,
+    offerSummary: buildBookOfferSummary(project, book, matchedThemes),
+    differenceSummary: buildDifferenceSummary(book, allBooks),
+    relevantSections: buildRelevantSections(project, book, matchedThemes),
+  };
+}
+
+function BookCover({ book, compact = false }) {
+  const seed = `${book?.title || ""}${book?.author || ""}${book?.category || ""}`;
+  const hue = Math.abs(hashCode(seed)) % 360;
+  const coverClassName = compact ? "book-cover compact" : "book-cover";
+
+  if (book?.coverImageUrl) {
+    return (
+      <div className={coverClassName}>
+        <img src={book.coverImageUrl} alt={`${book.title} cover`} />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`${coverClassName} generated`}
+      style={{
+        "--cover-start": `hsl(${hue} 68% 42%)`,
+        "--cover-end": `hsl(${(hue + 36) % 360} 74% 62%)`,
+      }}
+    >
+      <span className="book-cover-category">{book?.category || "Library"}</span>
+      <strong>{book?.title || "Untitled Book"}</strong>
+      <small>{book?.author || "Unknown Author"}</small>
+    </div>
+  );
 }
 
 function getLoanStatus(loan) {
@@ -115,7 +319,7 @@ const adminTabs = [
   { key: "borrowers", label: "Borrowers" },
   { key: "fines", label: "Fine Clearance" },
   { key: "demand", label: "Demand Predictor" },
-  { key: "analytics Dashboard", label: "Analytics Dashboard" },
+  { key: "analytics", label: "Analytics" },
   { key: "alerts", label: "Notifications" },
 ];
 
@@ -127,14 +331,6 @@ const studentTabs = [
   { key: "ar", label: "AR Navigator" },
   { key: "account", label: "My Account" },
 ];
-
-const initialResearchForm = {
-  topic: "",
-  researchQuestion: "",
-  methodology: "",
-  keywords: "",
-  status: "planning",
-};
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
@@ -152,8 +348,6 @@ export default function App() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [research, setResearch] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
-  const [showResearchForm, setShowResearchForm] = useState(false);
-  const [researchForm, setResearchForm] = useState(initialResearchForm);
 
   const [query, setQuery] = useState("");
   const [semantic, setSemantic] = useState(null);
@@ -176,6 +370,9 @@ export default function App() {
   const [arBookId, setArBookId] = useState("");
   const [arResult, setArResult] = useState(null);
   const [message, setMessage] = useState("");
+  const [showResearchForm, setShowResearchForm] = useState(false);
+  const [researchForm, setResearchForm] = useState(initialResearchForm);
+  const [taskDrafts, setTaskDrafts] = useState({});
 
   const [bookForm, setBookForm] = useState({
     code: "",
@@ -183,6 +380,7 @@ export default function App() {
     author: "",
     category: "",
     isbn: "",
+    coverImageUrl: "",
     stock: 1,
     totalCopies: 1,
     examSeasonImpact: "Medium",
@@ -321,6 +519,7 @@ export default function App() {
         author: "",
         category: "",
         isbn: "",
+        coverImageUrl: "",
         stock: 1,
         totalCopies: 1,
         examSeasonImpact: "Medium",
@@ -442,13 +641,6 @@ export default function App() {
     });
   }
 
-  async function runGuidedSearch(nextQuery) {
-    const trimmed = String(nextQuery || "").trim();
-    if (!trimmed) return;
-    setQuery(trimmed);
-    await semanticSearch(trimmed);
-  }
-
   async function runHomeSearch(e) {
     e.preventDefault();
     if (!query.trim()) {
@@ -464,29 +656,28 @@ export default function App() {
   }
 
   async function sendAI(nextText = null) {
-    const outgoing = String(nextText ?? aiInput).trim();
-    if (!outgoing || aiLoading) return;
-    const mine = { role: "user", text: outgoing };
+    const outgoingText = String(nextText ?? aiInput).trim();
+    if (!outgoingText || aiLoading) return;
+    const mine = { role: "user", text: outgoingText };
     setAiMessages((prev) => [...prev, mine]);
     if (nextText === null) setAiInput("");
     setAiLoading(true);
     try {
       const history = [...aiMessages, mine].map((m) => ({ role: m.role, text: m.text })).slice(-12);
       const { data } = await api.post("/ai/assistant", { message: mine.text, messages: history });
-      setAiMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          text: data.reply,
-          provider: data.provider || "",
-          model: data.model || "",
-          warning: data.warning || "",
-          latencyMs: data.latencyMs || 0,
-          context: data.context || null,
-          suggestedPrompts: Array.isArray(data.suggestedPrompts) ? data.suggestedPrompts : [],
-          sources: Array.isArray(data.sources) ? data.sources : [],
-        },
-      ]);
+        setAiMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            text: data.reply,
+            provider: data.provider || "",
+            model: data.model || "",
+            warning: data.warning || "",
+            context: data.context || null,
+            suggestedPrompts: Array.isArray(data.suggestedPrompts) ? data.suggestedPrompts : [],
+            sources: Array.isArray(data.sources) ? data.sources : [],
+          },
+        ]);
     } catch (error) {
       const errText = error?.response?.data?.message || "Ollama helper is unavailable right now.";
       setAiMessages((prev) => [...prev, { role: "ai", text: errText }]);
@@ -537,24 +728,28 @@ export default function App() {
     });
   }
 
+  async function saveResearchProject(projectId, updates, successText) {
+    await withAction(async () => {
+      await api.put(`/research/${projectId}`, updates);
+      await loadResearch();
+    }, successText);
+  }
+
   async function addResearch() {
     if (!researchForm.topic.trim()) {
-      setMessage("Add a research topic before creating the project");
+      setMessage("Add a project topic to create a research workspace.");
       return;
     }
 
     await withAction(async () => {
       await api.post("/research", {
-        topic: researchForm.topic,
-        researchQuestion: researchForm.researchQuestion,
-        methodology: researchForm.methodology,
-        keywords: researchForm.keywords.split(",").map((value) => value.trim()).filter(Boolean),
+        topic: researchForm.topic.trim(),
+        researchQuestion: researchForm.researchQuestion.trim(),
+        methodology: researchForm.methodology.trim(),
         status: researchForm.status,
-        milestones: [
-          { phase: "Topic Selection", progress: 0, milestone: "Define research scope", notes: "" },
-          { phase: "Literature Review", progress: 0, milestone: "Collect 20 papers", notes: "" },
-          { phase: "Methodology", progress: 0, milestone: "Draft methods", notes: "" },
-        ],
+        keywords: researchForm.keywords.split(",").map((item) => item.trim()).filter(Boolean),
+        notes: researchForm.notes.trim(),
+        targetCompletionDate: researchForm.targetCompletionDate || null,
       });
       setResearchForm(initialResearchForm);
       setShowResearchForm(false);
@@ -562,34 +757,46 @@ export default function App() {
     }, "Research project created");
   }
 
-  function seedResearchFromSearch() {
-    const keywords = uniqueItems([
-      ...String(researchForm.keywords || "").split(",").map((value) => value.trim()),
-      ...(semantic?.relatedThemes || []).slice(0, 4),
-    ]).join(", ");
-
-    setResearchForm((prev) => ({
-      ...prev,
-      topic: prev.topic || query,
-      keywords,
-    }));
-    setShowResearchForm(true);
-    setActiveTab("research");
+  async function updateResearchStatus(projectId, nextStatus) {
+    const project = research.find((item) => item._id === projectId);
+    if (!project) return;
+    await saveResearchProject(projectId, { ...project, status: nextStatus }, "Project status updated");
   }
 
-  async function updateMilestoneProgress(projectId, milestoneIndex, nextProgress) {
+  async function toggleResearchTask(projectId, taskIndex) {
     const project = research.find((item) => item._id === projectId);
     if (!project) return;
 
-    const clamped = Math.max(0, Math.min(100, Number(nextProgress) || 0));
-    const milestones = (project.milestones || []).map((milestone, index) => (
-      index === milestoneIndex ? { ...milestone, progress: clamped } : milestone
+    const tasks = getResearchTasks(project).map((task, index) => (
+      index === taskIndex
+        ? { ...task, status: taskStatusCycle[task.status] || "todo" }
+        : task
     ));
 
-    await withAction(async () => {
-      await api.put(`/research/${projectId}`, { milestones });
-      await loadResearch();
-    }, "Milestone progress updated");
+    await saveResearchProject(projectId, { ...project, tasks }, "Task progress updated");
+  }
+
+  async function addTaskToProject(projectId) {
+    const title = String(taskDrafts[projectId] || "").trim();
+    if (!title) {
+      setMessage("Add a task title before saving it.");
+      return;
+    }
+
+    const project = research.find((item) => item._id === projectId);
+    if (!project) return;
+
+    const tasks = [...getResearchTasks(project), { title, status: "todo", dueDate: null, notes: "" }];
+    await saveResearchProject(projectId, { ...project, tasks }, "Task added");
+    setTaskDrafts((prev) => ({ ...prev, [projectId]: "" }));
+  }
+
+  async function removeTaskFromProject(projectId, taskIndex) {
+    const project = research.find((item) => item._id === projectId);
+    if (!project) return;
+
+    const tasks = getResearchTasks(project).filter((_, index) => index !== taskIndex);
+    await saveResearchProject(projectId, { ...project, tasks }, "Task removed");
   }
 
   async function subscribe(bookId) {
@@ -632,6 +839,21 @@ export default function App() {
     setActiveTab("alerts");
   }
 
+  function getRecommendedBooksForProject(project) {
+    return [...books]
+      .map((book) => {
+        const score = scoreBookForProject(project, book);
+        return {
+          book,
+          score,
+          insight: buildBookInsight(project, book, books),
+        };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 8);
+  }
+
   const isAdmin = adminRoles.includes(user?.role);
   const isApprovalAdmin = user?.role === "admin";
   const tabs = isAdmin ? adminTabs : studentTabs;
@@ -650,7 +872,7 @@ export default function App() {
   const paidFineCount = useMemo(() => fines.filter((fine) => fine.status === "paid").length, [fines]);
   const lowStockCount = useMemo(() => books.filter((book) => book.stock <= 2).length, [books]);
   const outOfStockCount = useMemo(() => books.filter((book) => book.stock === 0).length, [books]);
-  const highDemandCount = useMemo(() => demand.filter((item) => item.demandScore >= 80).length, [demand]);
+  const highDemandCount = useMemo(() => demand.filter((item) => item.demandScore >= 40).length, [demand]);
   const overdues = useMemo(() => activeLoans.filter((loan) => daysLeft(loan.dueDate) < 0).length, [activeLoans]);
   const unreadAlertsCount = useMemo(() => alerts.filter((a) => !a.read).length, [alerts]);
   const readAlertsCount = useMemo(() => alerts.filter((a) => a.read).length, [alerts]);
@@ -724,7 +946,11 @@ export default function App() {
   );
   const studentDateLabel = useMemo(() => fmtLongDate(new Date()), []);
   const researchDueSoonCount = useMemo(
-    () => research.filter((project) => (project.milestones || []).some((item) => item.progress >= 70 && item.progress < 100)).length,
+    () => research.filter((project) => {
+      if (!project?.targetCompletionDate || project.status === "completed") return false;
+      const daysUntilDue = daysLeft(project.targetCompletionDate);
+      return daysUntilDue >= 0 && daysUntilDue <= 7;
+    }).length,
     [research]
   );
   const recentActivity = useMemo(() => {
@@ -773,21 +999,18 @@ export default function App() {
     () => [...aiMessages].reverse().find((entry) => entry.role === "ai" && (entry.model || entry.provider || entry.warning)) || null,
     [aiMessages]
   );
-  const aiQuickPrompts = useMemo(
-    () => {
-      const dynamic = latestAiRuntime?.suggestedPrompts?.length
-        ? latestAiRuntime.suggestedPrompts
-        : [
-          query ? `Help me search for "${query}" using better keywords.` : "",
-          research[0]?.topic ? `Turn "${research[0].topic}" into a research question and search plan.` : "",
-          "Show me how to compare the top 3 relevant books for my topic.",
-          "Suggest a simple literature review workflow using the library catalog.",
-        ];
+  const aiQuickPrompts = useMemo(() => {
+    const dynamic = latestAiRuntime?.suggestedPrompts?.length
+      ? latestAiRuntime.suggestedPrompts
+      : [
+        query ? `Help me search for "${query}" using better keywords.` : "",
+        research[0]?.topic ? `Turn "${research[0].topic}" into a research question and search plan.` : "",
+        "Show me how to compare the top 3 relevant books for my topic.",
+        "Suggest a simple literature review workflow using the library catalog.",
+      ];
 
-      return uniqueItems(dynamic).slice(0, 4);
-    },
-    [latestAiRuntime, query, research]
-  );
+    return uniqueItems(dynamic).slice(0, 4);
+  }, [latestAiRuntime, query, research]);
 
   const arFloors = {
     1: ["CH-05", "BI-08", "BI-02"],
@@ -1111,17 +1334,18 @@ export default function App() {
                 <div className="fine-metrics-grid">
                   <article className="fine-metric-card">
                     <span>Pending fine records</span>
-                    <strong>{pendingFineCount}</strong>
+                    <strong>{analytics?.fines?.pendingRecords ?? pendingFineCount}</strong>
                   </article>
                   <article className="fine-metric-card">
                     <span>Blocked users</span>
-                    <strong>{user.isBlocked ? 1 : 0}</strong>
+                    <strong>{analytics?.fines?.blockedUsers ?? 0}</strong>
                   </article>
                   <article className="fine-metric-card">
-                    <span>Total tracked users</span>
-                    <strong>{analytics?.totals?.totalUsers ?? 0}</strong>
+                    <span>Outstanding fine balance</span>
+                    <strong>${Number(analytics?.fines?.totalOutstanding ?? outstandingFine).toFixed(2)}</strong>
                   </article>
                 </div>
+                <p className="muted">Any borrower fine or manual fine-resolution step now shows up in the shared alert feed for admins, librarians, and staff.</p>
                 <div className="stack compact admin-rule-list">
                   <div className="line-item"><span>1. Payment submitted</span><strong>Await verification</strong></div>
                   <div className="line-item"><span>2. Librarian verifies</span><strong>Clear blocker</strong></div>
@@ -1159,6 +1383,7 @@ export default function App() {
               <input placeholder="Author" value={bookForm.author} onChange={(e) => setBookForm((f) => ({ ...f, author: e.target.value }))} required />
               <input placeholder="Category" value={bookForm.category} onChange={(e) => setBookForm((f) => ({ ...f, category: e.target.value }))} required />
               <input placeholder="ISBN" value={bookForm.isbn} onChange={(e) => setBookForm((f) => ({ ...f, isbn: e.target.value }))} required />
+              <input placeholder="Cover image URL (optional)" value={bookForm.coverImageUrl} onChange={(e) => setBookForm((f) => ({ ...f, coverImageUrl: e.target.value }))} />
               <input type="number" min="0" placeholder="Stock" value={bookForm.stock} onChange={(e) => setBookForm((f) => ({ ...f, stock: Number(e.target.value) }))} required />
               <input type="number" min="0" placeholder="Total Copies" value={bookForm.totalCopies} onChange={(e) => setBookForm((f) => ({ ...f, totalCopies: Number(e.target.value) }))} required />
               <button type="submit">Add Book</button>
@@ -1167,11 +1392,12 @@ export default function App() {
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Title</th><th>Author</th><th>Category</th><th>Stock</th><th>Demand</th><th>Actions</th></tr>
+                  <tr><th>Cover</th><th>Title</th><th>Author</th><th>Category</th><th>Stock</th><th>Demand</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {inventoryRows.map((book) => (
                     <tr key={book._id}>
+                      <td><BookCover book={book} compact /></td>
                       <td>{book.title}</td>
                       <td>{book.author}</td>
                       <td>{book.category}</td>
@@ -1330,7 +1556,7 @@ export default function App() {
             <h2>Demand Predictor</h2>
             <table>
               <thead>
-                <tr><th>Book</th><th>Demand Score</th><th>Exam Impact</th><th>Stock</th><th>Recommendation</th></tr>
+                <tr><th>Book</th><th>Demand Score</th><th>Exam Impact</th><th>Stock</th><th>Recommendation</th><th>Signals</th></tr>
               </thead>
               <tbody>
                 {demand.map((item) => (
@@ -1347,6 +1573,7 @@ export default function App() {
                     <td>{item.examSeasonImpact}</td>
                     <td>{item.stock}/{item.totalCopies}</td>
                     <td>{item.recommendation}</td>
+                    <td>{Array.isArray(item.signalSummary) && item.signalSummary.length ? item.signalSummary.join(", ") : "Baseline catalog demand"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1468,7 +1695,7 @@ export default function App() {
                 <div className="student-stat-head"><span className="student-stat-icon">📁</span><h3>Research Projects</h3></div>
                 <strong>{research.length}</strong>
                 <p>{researchDueSoonCount ? `${researchDueSoonCount} due soon` : research.length ? "Stay on track" : "No projects yet"}</p>
-                <small>{research.length ? "Open tracker to review milestones" : "Create your first project →"}</small>
+                <small>{research.length ? "Open tracker to manage sources and writing tasks" : "Create your first project →"}</small>
               </article>
             </section>
 
@@ -1548,82 +1775,50 @@ export default function App() {
               />
               <button onClick={() => semanticSearch(query)}>Search</button>
             </div>
-            {query.trim() ? (
-              <div className="row wrap search-action-row">
-                <button className="subtle" onClick={seedResearchFromSearch}>Track This Topic</button>
-                <button
-                  className="subtle"
-                  onClick={() => openAiWithPrompt(`Help me research "${query}" using the library catalog.`)}
-                >
-                  Ask AI About This Topic
-                </button>
-              </div>
-            ) : null}
             {semantic ? (
               <div className="stack">
                 <p className="muted">
                   {(semantic.meta?.returned ?? semantic.books?.length ?? 0)} results • {(semantic.meta?.strategy || "search")}
                 </p>
-                {semantic.meta?.plan?.length ? (
-                  <section className="search-guidance-card">
-                    <div className="section-head">
-                      <h3>Search Guide</h3>
-                    </div>
-                    {(semantic.meta.intentLabels || []).length ? (
-                      <div className="row wrap">
-                        {(semantic.meta.intentLabels || []).map((label) => (
-                          <span key={label} className="pill ok">{formatSearchLabel(label)}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="stack compact">
-                      {(semantic.meta.plan || []).map((step) => (
-                        <p key={step} className="muted">{step}</p>
-                      ))}
-                    </div>
-                    {(semantic.meta.expandedTerms || []).length ? (
-                      <div className="row wrap">
-                        {(semantic.meta.expandedTerms || []).map((term) => (
-                          <span key={term} className="term-chip">{term}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </section>
-                ) : null}
                 {(semantic.books || []).length ? (semantic.books || []).map((book) => (
-                  <article key={book._id} className="result-row">
-                    <div>
-                      <strong>{book.title}</strong>
-                      <p>{book.author} • {book.category}</p>
+                  <article key={book._id} className="result-row search-book-row">
+                    <div className="row search-book-main">
+                      <BookCover book={book} compact />
+                      <div>
+                        <strong>{book.title}</strong>
+                        <p>{book.author} • {book.category}</p>
+                        <p className="muted">Shelf {book.location?.shelf} • Floor {book.location?.floor} • Stock {book.stock}/{book.totalCopies}</p>
+                        <details className="book-insight-view">
+                          <summary>View what this book offers</summary>
+                          {(() => {
+                            const insight = buildBookInsight({ topic: query || book.title, keywords: semantic?.relatedThemes || [] }, book, books);
+                            return (
+                              <div className="book-insight-copy">
+                                <p>{insight.offerSummary}</p>
+                                <p>{insight.differenceSummary}</p>
+                                <div className="stack compact">
+                                  <strong>Likely useful sections</strong>
+                                  {insight.relevantSections.map((section) => (
+                                    <p key={`${book._id}-${section}`} className="muted">{section}</p>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </details>
+                      </div>
                     </div>
                     <div className="row">
                       <button disabled={user.isBlocked} onClick={() => reserveBook(book._id)}>Reserve</button>
                       <button onClick={() => subscribe(book._id)}>Stock Alert</button>
-                      <button
-                        className="subtle"
-                        onClick={() => openAiWithPrompt(`How can I use "${book.title}" for research on "${query || book.category}"?`)}
-                      >
-                        Ask AI
-                      </button>
                     </div>
                   </article>
                 )) : <p className="muted">No matches found. Try a broader topic or related theme.</p>}
-                {(semantic.meta?.suggestedQueries || []).length ? (
-                  <div className="stack compact">
-                    <p className="muted">Try these refined searches next:</p>
-                    <div className="row wrap">
-                      {(semantic.meta.suggestedQueries || []).map((suggestion) => (
-                        <button key={suggestion} className="subtle" onClick={() => runGuidedSearch(suggestion)}>
-                          {suggestion}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
                 <div className="row wrap">
                   {(semantic.relatedThemes || []).map((theme) => (
                     <button key={theme} className="subtle" onClick={() => {
-                      runGuidedSearch(theme);
+                      setQuery(theme);
+                      semanticSearch(theme);
                     }}>{theme}</button>
                   ))}
                 </div>
@@ -1690,8 +1885,11 @@ export default function App() {
             <h3>Stock Subscriptions</h3>
             <div className="stack">
               {subscriptions.map((sub) => (
-                <article key={sub._id} className="result-row">
-                  <div><strong>{sub.book?.title}</strong></div>
+                <article key={sub._id} className="result-row search-book-row">
+                  <div className="row search-book-main">
+                    <BookCover book={sub.book} compact />
+                    <div><strong>{sub.book?.title}</strong></div>
+                  </div>
                   <button onClick={() => unsubscribe(sub.book?._id)}>Unsubscribe</button>
                 </article>
               ))}
@@ -1702,96 +1900,229 @@ export default function App() {
         {!isAdmin && activeTab === "research" ? (
           <section className="panel">
             <div className="row between">
-              <h2>Research Tracker</h2>
-              <button onClick={() => setShowResearchForm((prev) => !prev)}>
+              <div>
+                <h2>Research Tracker</h2>
+                <p className="muted">Use your project title to surface the best books in the library, see what each one contributes, and focus on the sections most likely to help your research.</p>
+              </div>
+              <button onClick={() => setShowResearchForm((current) => !current)}>
                 {showResearchForm ? "Close Form" : "New Project"}
               </button>
             </div>
+
             {showResearchForm ? (
               <article className="card research-form-card">
-                <div className="stack compact">
+                <div className="grid-2 research-form-grid">
                   <input
                     value={researchForm.topic}
-                    onChange={(e) => setResearchForm((prev) => ({ ...prev, topic: e.target.value }))}
-                    placeholder="Topic"
+                    onChange={(e) => setResearchForm((current) => ({ ...current, topic: e.target.value }))}
+                    placeholder="Project topic"
                   />
+                  <select
+                    value={researchForm.status}
+                    onChange={(e) => setResearchForm((current) => ({ ...current, status: e.target.value }))}
+                  >
+                    {researchStatusOptions.map((status) => (
+                      <option key={status} value={status}>{formatWorkflowLabel(status)}</option>
+                    ))}
+                  </select>
                   <input
                     value={researchForm.researchQuestion}
-                    onChange={(e) => setResearchForm((prev) => ({ ...prev, researchQuestion: e.target.value }))}
+                    onChange={(e) => setResearchForm((current) => ({ ...current, researchQuestion: e.target.value }))}
                     placeholder="Research question"
                   />
                   <input
                     value={researchForm.methodology}
-                    onChange={(e) => setResearchForm((prev) => ({ ...prev, methodology: e.target.value }))}
+                    onChange={(e) => setResearchForm((current) => ({ ...current, methodology: e.target.value }))}
                     placeholder="Methodology or approach"
                   />
                   <input
                     value={researchForm.keywords}
-                    onChange={(e) => setResearchForm((prev) => ({ ...prev, keywords: e.target.value }))}
+                    onChange={(e) => setResearchForm((current) => ({ ...current, keywords: e.target.value }))}
                     placeholder="Keywords, separated by commas"
                   />
-                  <select
-                    value={researchForm.status}
-                    onChange={(e) => setResearchForm((prev) => ({ ...prev, status: e.target.value }))}
-                  >
-                    <option value="planning">Planning</option>
-                    <option value="literature-review">Literature Review</option>
-                    <option value="drafting">Drafting</option>
-                    <option value="completed">Completed</option>
-                  </select>
-                  <div className="row">
-                    <button onClick={addResearch}>Create Project</button>
-                    <button className="subtle" onClick={() => setResearchForm(initialResearchForm)}>Reset</button>
-                  </div>
+                  <input
+                    type="date"
+                    value={researchForm.targetCompletionDate}
+                    onChange={(e) => setResearchForm((current) => ({ ...current, targetCompletionDate: e.target.value }))}
+                  />
+                </div>
+                <textarea
+                  value={researchForm.notes}
+                  onChange={(e) => setResearchForm((current) => ({ ...current, notes: e.target.value }))}
+                  placeholder="What are you trying to prove, compare, or analyze?"
+                  rows={4}
+                />
+                <div className="row">
+                  <button onClick={addResearch}>Create Project</button>
+                  <button className="subtle" onClick={() => setResearchForm(initialResearchForm)}>Reset</button>
                 </div>
               </article>
             ) : null}
+
             <div className="stack">
-              {research.map((project) => (
-                <article key={project._id} className="card">
-                  <div className="row between wrap">
-                    <h3>{project.topic}</h3>
-                    <span className="pill ok">{formatProjectStatus(project.status || "planning")}</span>
-                  </div>
-                  {project.researchQuestion ? <p className="muted">{project.researchQuestion}</p> : null}
-                  {project.methodology ? <p className="muted">Method: {project.methodology}</p> : null}
-                  {(project.keywords || []).length ? (
-                    <div className="row wrap">
-                      {(project.keywords || []).map((keyword) => (
-                        <span key={`${project._id}-${keyword}`} className="term-chip">{keyword}</span>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div className="row wrap">
-                    <button
-                      className="subtle"
-                      onClick={() => openAiWithPrompt(
-                        `Help me plan a literature review for "${project.topic}"${project.methodology ? ` using ${project.methodology}` : ""}.`
-                      )}
-                    >
-                      Ask AI About This Project
-                    </button>
-                  </div>
-                  {(project.milestones || []).map((m, milestoneIndex) => (
-                    <div key={`${project._id}-${m.phase}`} className="milestone-row">
-                      <p>{m.phase}</p>
-                      <div className="row milestone-edit-row">
-                        <input
-                          className="milestone-range"
-                          type="range"
-                          min="0"
-                          max="100"
-                          step="5"
-                          value={m.progress}
-                          onChange={(e) => updateMilestoneProgress(project._id, milestoneIndex, e.target.value)}
-                        />
-                        <span className="milestone-value">{m.progress}%</span>
+              {research.map((project) => {
+                const taskStats = getResearchTaskStats(project);
+                const progress = getResearchProgress(project);
+                const recommendedBooks = getRecommendedBooksForProject(project);
+                return (
+                  <article key={project._id} className="card research-project-card">
+                    <div className="row between research-project-head">
+                      <div>
+                        <h3>{project.topic}</h3>
+                        {project.researchQuestion ? <p className="muted">{project.researchQuestion}</p> : null}
                       </div>
-                      <small>{m.milestone}</small>
+                      <div className="stack compact research-project-meta">
+                        <select value={project.status || "planning"} onChange={(e) => updateResearchStatus(project._id, e.target.value)}>
+                          {researchStatusOptions.map((status) => (
+                            <option key={status} value={status}>{formatWorkflowLabel(status)}</option>
+                          ))}
+                        </select>
+                        {project.targetCompletionDate ? (
+                          <span className="muted">Due {fmtDate(project.targetCompletionDate)}</span>
+                        ) : (
+                          <span className="muted">No due date</span>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </article>
-              ))}
+
+                    <div className="research-summary-grid">
+                      <div className="research-summary-card">
+                        <span>Completion</span>
+                        <strong>{progress}%</strong>
+                        <small>{taskStats.done}/{taskStats.total || 0} tasks finished</small>
+                      </div>
+                      <div className="research-summary-card">
+                        <span>Recommended Reads</span>
+                        <strong>{recommendedBooks.length}</strong>
+                        <small>{recommendedBooks[0] ? `Top match: ${recommendedBooks[0].book.title}` : "No strong match yet"}</small>
+                      </div>
+                      <div className="research-summary-card">
+                        <span>Current Focus</span>
+                        <strong>{formatWorkflowLabel(project.status || "planning")}</strong>
+                        <small>{taskStats.active ? `${taskStats.active} task in progress` : "Ready for the next step"}</small>
+                      </div>
+                    </div>
+
+                    {project.methodology || project.notes || (project.keywords || []).length ? (
+                      <div className="stack compact">
+                        {project.methodology ? <p className="muted"><strong>Method:</strong> {project.methodology}</p> : null}
+                        {project.notes ? <p className="muted"><strong>Notes:</strong> {project.notes}</p> : null}
+                        {(project.keywords || []).length ? (
+                          <div className="row wrap">
+                            {project.keywords.map((keyword) => (
+                              <span key={`${project._id}-${keyword}`} className="pill ok">{keyword}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <section className="research-subsection">
+                      <div className="section-head">
+                        <div>
+                          <h4>Recommended From Your Library</h4>
+                          <p className="muted">These are the books most aligned to the project title and keywords. Section guidance is inferred from catalog metadata, not exact page numbers.</p>
+                        </div>
+                        <span className="muted">{recommendedBooks.length} strong matches</span>
+                      </div>
+                      {recommendedBooks.length ? (
+                        <div className="research-book-grid">
+                          {recommendedBooks.map(({ book, score, insight }) => (
+                            <article key={`${project._id}-book-${book._id}`} className="recommended-book-card">
+                              <BookCover book={book} />
+                              <div className="stack compact">
+                                <div className="row between wrap">
+                                  <strong>{book.title}</strong>
+                                  <span className="pill ok">Match {score}</span>
+                                </div>
+                                <p>{book.author} • {book.category}</p>
+                                <p className="muted">Shelf {book.location?.shelf} • Floor {book.location?.floor} • Demand {book.demandScore}</p>
+                                {insight.matchedThemes.length ? (
+                                  <div className="row wrap">
+                                    {insight.matchedThemes.map((theme) => (
+                                      <span key={`${book._id}-${theme}`} className="pill warn">{theme}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <p>{insight.offerSummary}</p>
+                                <p>{insight.differenceSummary}</p>
+                                <div className="stack compact">
+                                  <strong>Best sections to scan first</strong>
+                                  {insight.relevantSections.map((section) => (
+                                    <p key={`${book._id}-${section}`} className="muted">{section}</p>
+                                  ))}
+                                </div>
+                                <details className="book-insight-view">
+                                  <summary>Open full book brief</summary>
+                                  <div className="book-insight-copy">
+                                    <p><strong>What it offers:</strong> {insight.offerSummary}</p>
+                                    <p><strong>How it differs:</strong> {insight.differenceSummary}</p>
+                                    <div className="stack compact">
+                                      <strong>Use these sections for "{project.topic}"</strong>
+                                      {insight.relevantSections.map((section) => (
+                                        <p key={`${project._id}-${book._id}-${section}`} className="muted">{section}</p>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </details>
+                                <div className="row wrap">
+                                  <button className="subtle" onClick={() => {
+                                    setQuery(book.title);
+                                    setActiveTab("search");
+                                    semanticSearch(book.title);
+                                  }}>Use in Search</button>
+                                  <button className="subtle" onClick={() => openAiWithPrompt(`Help me use "${book.title}" for my research project "${project.topic}".`)}>
+                                    Ask AI About This Book
+                                  </button>
+                                </div>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : <p className="muted">No strong catalog matches yet. Tighten the project title or add clearer keywords to improve the recommendation set.</p>}
+                    </section>
+
+                    <div className="research-section-grid">
+                      <section className="research-subsection">
+                        <div className="section-head">
+                          <h4>Workflow</h4>
+                          <span className="muted">{taskStats.remaining} remaining</span>
+                        </div>
+                        <div className="stack">
+                          {getResearchTasks(project).map((task, taskIndex) => (
+                            <article key={`${project._id}-task-${taskIndex}`} className="task-card">
+                              <div>
+                                <strong>{task.title}</strong>
+                                {task.notes ? <p>{task.notes}</p> : null}
+                              </div>
+                              <div className="row wrap">
+                                <span className={`pill ${task.status === "done" ? "ok" : task.status === "in_progress" ? "warn" : "danger"}`}>
+                                  {formatWorkflowLabel(task.status)}
+                                </span>
+                                <button className="subtle" onClick={() => toggleResearchTask(project._id, taskIndex)}>
+                                  Advance
+                                </button>
+                                <button className="subtle" onClick={() => removeTaskFromProject(project._id, taskIndex)}>
+                                  Remove
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                          <div className="row">
+                            <input
+                              value={taskDrafts[project._id] || ""}
+                              onChange={(e) => setTaskDrafts((current) => ({ ...current, [project._id]: e.target.value }))}
+                              placeholder="Add a concrete next task"
+                            />
+                            <button onClick={() => addTaskToProject(project._id)}>Add Task</button>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  </article>
+                );
+              })}
+              {!research.length ? <p className="muted">No projects yet. Create one to start collecting sources and planning your writing workflow.</p> : null}
             </div>
           </section>
         ) : null}
@@ -1856,9 +2187,9 @@ export default function App() {
             <section className="ai-window" aria-label="AI Research Helper">
               <div className="ai-window-head">
                 <div className="ai-window-title">
-                  <span className="ai-window-badge">OLLAMA</span>
+                  <span className="ai-window-badge">LIBRARY</span>
                   <div className="ai-window-heading">
-                    <strong>Local Research Helper</strong>
+                    <strong>Library Assistant</strong>
                     <small>
                       {latestAiRuntime?.model
                         ? `Running on ${latestAiRuntime.model}`
@@ -1881,11 +2212,6 @@ export default function App() {
                     {m.role === "ai" && m.context ? (
                       <div className="ai-context-meta">
                         Context used: {m.context.projectsUsed} project(s), {m.context.loansUsed} loan(s), {m.context.booksUsed} book match(es)
-                      </div>
-                    ) : null}
-                    {m.role === "ai" && m.latencyMs ? (
-                      <div className="ai-context-meta">
-                        Answered in {(Number(m.latencyMs) / 1000).toFixed(Number(m.latencyMs) >= 1000 ? 1 : 2)}s
                       </div>
                     ) : null}
                     {m.role === "ai" && m.warning ? <div className="ai-warning">{m.warning}</div> : null}
@@ -1939,8 +2265,8 @@ export default function App() {
           <button className="ai-float-btn" onClick={() => setAiOpen((v) => !v)}>
             <span className="ai-float-icon">✦</span>
             <span className="ai-float-copy">
-              <strong>Ollama Helper</strong>
-              <small>Local chat with search context</small>
+              <strong>Library Assistant</strong>
+              <small>Catalog-aware local research help</small>
             </span>
           </button>
         </div>
